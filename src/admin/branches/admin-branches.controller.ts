@@ -325,4 +325,40 @@ export class AdminBranchesController {
   ) {
     return this.adminBranchesService.resetRolePin(branchId, roleName);
   }
+
+  @Get(':branchId/staff')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Get active employees assigned to a branch for dropdown',
+  })
+  @ApiParam({
+    name: 'branchId',
+    description: 'UUID of the branch',
+    example: 'b1a2c3d4-e5f6-7890-abcd-ef1234567890',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Active branch staff retrieved successfully',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Invalid UUID format or inactive branch',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid authentication token',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'Access denied: User does not have ADMIN role',
+  })
+  @ApiResponse({ status: 404, description: 'Branch not found' })
+  async getBranchStaffForDropdown(
+    @Param('branchId', new ParseUUIDPipe()) branchId: string,
+  ) {
+    return this.adminBranchesService.getBranchStaffForDropdown(branchId);
+  }
 }

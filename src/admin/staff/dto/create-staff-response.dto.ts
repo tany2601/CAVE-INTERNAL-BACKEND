@@ -1,6 +1,21 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { RoleDto } from '../../roles/dto/role-response.dto.js';
 import { BranchDataDto } from '../../branches/dto/create-branch-response.dto.js';
+import { CommissionModel } from '@prisma/client';
+
+export class StaffCommissionSlabDto {
+  @ApiProperty({ example: 'slab-uuid-123' })
+  id!: string;
+
+  @ApiProperty({ example: 1 })
+  slabOrder!: number;
+
+  @ApiProperty({ example: 10000 })
+  minRevenue!: number;
+
+  @ApiProperty({ example: 5 })
+  commissionPercentage!: number;
+}
 
 export class StaffDataDto {
   @ApiProperty({ example: 'user-staff-uuid-123' })
@@ -23,6 +38,21 @@ export class StaffDataDto {
 
   @ApiPropertyOptional({ type: BranchDataDto, nullable: true })
   branch!: BranchDataDto | null;
+
+  @ApiPropertyOptional({ example: 25000, nullable: true })
+  monthlySalary!: number | null;
+
+  @ApiPropertyOptional({ enum: CommissionModel, nullable: true, example: 'FLAT_PERCENTAGE' })
+  commissionModel!: CommissionModel | null;
+
+  @ApiPropertyOptional({ example: 10, nullable: true })
+  flatCommissionPercentage!: number | null;
+
+  @ApiPropertyOptional({ example: 5000, nullable: true })
+  dailyTargetAmount!: number | null;
+
+  @ApiPropertyOptional({ type: [StaffCommissionSlabDto] })
+  commissionSlabs?: StaffCommissionSlabDto[];
 
   @ApiProperty({ example: true })
   isActive!: boolean;

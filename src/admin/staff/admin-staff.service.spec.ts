@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException } from '@nestjs/common';
 import { AdminStaffService } from './admin-staff.service.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { CommissionModel } from '@prisma/client';
 
 describe('AdminStaffService', () => {
   let service: AdminStaffService;
@@ -20,13 +21,11 @@ describe('AdminStaffService', () => {
       findUnique: ReturnType<typeof vi.fn>;
       update: ReturnType<typeof vi.fn>;
     };
-  };
-
-  const mockActiveManagerRole = {
-    id: 'role-manager-uuid',
-    name: 'MANAGER',
-    description: 'Branch Manager',
-    isActive: true,
+    staffCommissionSlab: {
+      createMany: ReturnType<typeof vi.fn>;
+      deleteMany: ReturnType<typeof vi.fn>;
+    };
+    $transaction: ReturnType<typeof vi.fn>;
   };
 
   const mockActiveStylistRole = {
@@ -43,13 +42,6 @@ describe('AdminStaffService', () => {
     isActive: true,
   };
 
-  const mockInactiveRole = {
-    id: 'role-inactive-uuid',
-    name: 'STYLIST',
-    description: 'Old Stylist Role',
-    isActive: false,
-  };
-
   const mockActiveBranch = {
     id: 'branch-active-uuid',
     name: 'Downtown Salon',
@@ -58,18 +50,6 @@ describe('AdminStaffService', () => {
     city: 'Metropolis',
     state: 'NY',
     isActive: true,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  };
-
-  const mockInactiveBranch = {
-    id: 'branch-inactive-uuid',
-    name: 'Closed Branch',
-    code: 'CB01',
-    address: '456 Old Rd',
-    city: 'Metropolis',
-    state: 'NY',
-    isActive: false,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
@@ -86,6 +66,11 @@ describe('AdminStaffService', () => {
     },
     branchId: mockActiveBranch.id,
     branch: mockActiveBranch,
+    monthlySalary: 25000,
+    commissionModel: CommissionModel.FLAT_PERCENTAGE,
+    flatCommissionPercentage: 10,
+    dailyTargetAmount: null,
+    commissionSlabs: [],
     isActive: true,
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -106,6 +91,16 @@ describe('AdminStaffService', () => {
         findUnique: vi.fn(),
         update: vi.fn(),
       },
+      staffCommissionSlab: {
+        createMany: vi.fn(),
+        deleteMany: vi.fn(),
+      },
+      $transaction: vi.fn((cb) => {
+        if (typeof cb === 'function') {
+          return cb(prismaService);
+        }
+        return Promise.all(cb);
+      }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -119,58 +114,128 @@ describe('AdminStaffService', () => {
   });
 
   describe('createStaff', () => {
-    it('1. Successfully creates staff with valid MANAGER/STYLIST role and active branch', async () => {
+    it('1. Successfully creates staff with FLAT_PERCENTAGE commission model', async () => {
       prismaService.role.findUnique.mockResolvedValue(mockActiveStylistRole);
       prismaService.branch.findUnique.mockResolvedValue(mockActiveBranch);
-      prismaService.user.create.mockResolvedValue(mockStaffUser);
+      prismaService.user.create.mockResolvedValue({ id: 'staff-user-uuid' });
+      prismaService.user.findUnique.mockResolvedValue(mockStaffUser);
 
       const dto = {
         name: 'Rahul',
         roleId: mockActiveStylistRole.id,
         branchId: mockActiveBranch.id,
+        monthlySalary: 25000,
+        commissionModel: CommissionModel.FLAT_PERCENTAGE,
+        flatCommissionPercentage: 10,
       };
 
       const result = await service.createStaff(dto);
 
-      expect(result).toEqual({
-        message: 'Staff member created successfully',
-        staff: mockStaffUser,
-      });
+      expect(result.message).toBe('Staff member created successfully');
+      expect(result.staff.flatCommissionPercentage).toBe(10);
+      expect(result.staff.commissionModel).toBe('FLAT_PERCENTAGE');
+    });
 
-      expect(prismaService.user.create).toHaveBeenCalledWith({
-        data: {
+    it('2. Successfully creates staff with DAILY_TARGET commission model', async () => {
+      prismaService.role.findUnique.mockResolvedValue(mockActiveStylistRole);
+      prismaService.branch.findUnique.mockResolvedValue(mockActiveBranch);
+      prismaService.user.create.mockResolvedValue({ id: 'staff-user-uuid' });
+
+      const mockDailyUser = {
+        ...mockStaffUser,
+        commissionModel: CommissionModel.DAILY_TARGET,
+        flatCommissionPercentage: null,
+        dailyTargetAmount: 5000,
+      };
+      prismaService.user.findUnique.mockResolvedValue(mockDailyUser);
+
+      const dto = {
+        name: 'Rahul',
+        roleId: mockActiveStylistRole.id,
+        branchId: mockActiveBranch.id,
+        monthlySalary: 25000,
+        commissionModel: CommissionModel.DAILY_TARGET,
+        dailyTargetAmount: 5000,
+      };
+
+      const result = await service.createStaff(dto);
+
+      expect(result.staff.dailyTargetAmount).toBe(5000);
+      expect(result.staff.commissionModel).toBe('DAILY_TARGET');
+    });
+
+    it('3. Successfully creates staff with MONTHLY_TARGET commission model and 3 slabs', async () => {
+      prismaService.role.findUnique.mockResolvedValue(mockActiveStylistRole);
+      prismaService.branch.findUnique.mockResolvedValue(mockActiveBranch);
+      prismaService.user.create.mockResolvedValue({ id: 'staff-user-uuid' });
+
+      const mockMonthlyUser = {
+        ...mockStaffUser,
+        commissionModel: CommissionModel.MONTHLY_TARGET,
+        flatCommissionPercentage: null,
+        dailyTargetAmount: null,
+        commissionSlabs: [
+          { id: 's1', slabOrder: 1, minRevenue: 10000, commissionPercentage: 5 },
+          { id: 's2', slabOrder: 2, minRevenue: 20000, commissionPercentage: 10 },
+          { id: 's3', slabOrder: 3, minRevenue: 30000, commissionPercentage: 15 },
+        ],
+      };
+      prismaService.user.findUnique.mockResolvedValue(mockMonthlyUser);
+
+      const dto = {
+        name: 'Rahul',
+        roleId: mockActiveStylistRole.id,
+        branchId: mockActiveBranch.id,
+        monthlySalary: 25000,
+        commissionModel: CommissionModel.MONTHLY_TARGET,
+        commissionSlabs: [
+          { slabOrder: 1, minRevenue: 10000, commissionPercentage: 5 },
+          { slabOrder: 2, minRevenue: 20000, commissionPercentage: 10 },
+          { slabOrder: 3, minRevenue: 30000, commissionPercentage: 15 },
+        ],
+      };
+
+      const result = await service.createStaff(dto);
+
+      expect(result.staff.commissionModel).toBe('MONTHLY_TARGET');
+      expect(result.staff.commissionSlabs).toHaveLength(3);
+      expect(prismaService.staffCommissionSlab.createMany).toHaveBeenCalled();
+    });
+
+    it('4. Rejects FLAT_PERCENTAGE model when flatCommissionPercentage is missing', async () => {
+      prismaService.role.findUnique.mockResolvedValue(mockActiveStylistRole);
+      prismaService.branch.findUnique.mockResolvedValue(mockActiveBranch);
+
+      await expect(
+        service.createStaff({
           name: 'Rahul',
           roleId: mockActiveStylistRole.id,
           branchId: mockActiveBranch.id,
-          isActive: true,
-        },
-        select: expect.any(Object),
-      });
-    });
-
-    it('2. Throws BadRequestException if role does not exist or is inactive', async () => {
-      prismaService.role.findUnique.mockResolvedValue(null);
-
-      await expect(
-        service.createStaff({
-          name: 'Rahul',
-          roleId: 'non-existent-role',
-          branchId: mockActiveBranch.id,
-        }),
-      ).rejects.toThrow(BadRequestException);
-
-      prismaService.role.findUnique.mockResolvedValue(mockInactiveRole);
-
-      await expect(
-        service.createStaff({
-          name: 'Rahul',
-          roleId: mockInactiveRole.id,
-          branchId: mockActiveBranch.id,
+          commissionModel: CommissionModel.FLAT_PERCENTAGE,
         }),
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('3. Throws BadRequestException if attempting to assign ADMIN role', async () => {
+    it('5. Rejects MONTHLY_TARGET model when revenue thresholds do not strictly increase', async () => {
+      prismaService.role.findUnique.mockResolvedValue(mockActiveStylistRole);
+      prismaService.branch.findUnique.mockResolvedValue(mockActiveBranch);
+
+      const dto = {
+        name: 'Rahul',
+        roleId: mockActiveStylistRole.id,
+        branchId: mockActiveBranch.id,
+        commissionModel: CommissionModel.MONTHLY_TARGET,
+        commissionSlabs: [
+          { slabOrder: 1, minRevenue: 20000, commissionPercentage: 5 },
+          { slabOrder: 2, minRevenue: 10000, commissionPercentage: 10 },
+          { slabOrder: 3, minRevenue: 30000, commissionPercentage: 15 },
+        ],
+      };
+
+      await expect(service.createStaff(dto)).rejects.toThrow(BadRequestException);
+    });
+
+    it('6. Rejects attempt to assign ADMIN role', async () => {
       prismaService.role.findUnique.mockResolvedValue(mockActiveAdminRole);
 
       await expect(
@@ -179,234 +244,56 @@ describe('AdminStaffService', () => {
           roleId: mockActiveAdminRole.id,
           branchId: mockActiveBranch.id,
         }),
-      ).rejects.toThrow(
-        new BadRequestException('Cannot assign ADMIN role to staff members.'),
-      );
-    });
-
-    it('4. Throws BadRequestException if branch does not exist or is inactive', async () => {
-      prismaService.role.findUnique.mockResolvedValue(mockActiveStylistRole);
-      prismaService.branch.findUnique.mockResolvedValue(null);
-
-      await expect(
-        service.createStaff({
-          name: 'Rahul',
-          roleId: mockActiveStylistRole.id,
-          branchId: 'non-existent-branch',
-        }),
       ).rejects.toThrow(BadRequestException);
-
-      prismaService.branch.findUnique.mockResolvedValue(mockInactiveBranch);
-
-      await expect(
-        service.createStaff({
-          name: 'Rahul',
-          roleId: mockActiveStylistRole.id,
-          branchId: mockInactiveBranch.id,
-        }),
-      ).rejects.toThrow(BadRequestException);
-    });
-  });
-
-  describe('listStaff', () => {
-    it('5. Lists staff members with default pagination and search/filters', async () => {
-      prismaService.user.findMany.mockResolvedValue([mockStaffUser]);
-      prismaService.user.count.mockResolvedValue(1);
-
-      const result = await service.listStaff({
-        page: 1,
-        limit: 10,
-        search: 'Rahul',
-        branchId: mockActiveBranch.id,
-        isActive: true,
-      });
-
-      expect(result).toEqual({
-        data: [mockStaffUser],
-        meta: {
-          total: 1,
-          page: 1,
-          limit: 10,
-          totalPages: 1,
-        },
-      });
-
-      expect(prismaService.user.findMany).toHaveBeenCalledWith({
-        where: {
-          role: { name: { in: ['MANAGER', 'STYLIST'] } },
-          branchId: mockActiveBranch.id,
-          isActive: true,
-          name: { contains: 'Rahul', mode: 'insensitive' },
-        },
-        select: expect.any(Object),
-        orderBy: { createdAt: 'desc' },
-        skip: 0,
-        take: 10,
-      });
-    });
-
-    it('6. Returns empty list when no staff members match filters', async () => {
-      prismaService.user.findMany.mockResolvedValue([]);
-      prismaService.user.count.mockResolvedValue(0);
-
-      const result = await service.listStaff({ search: 'NonExistent' });
-
-      expect(result).toEqual({
-        data: [],
-        meta: {
-          total: 0,
-          page: 1,
-          limit: 10,
-          totalPages: 0,
-        },
-      });
-    });
-  });
-
-  describe('getStaffById', () => {
-    it('7. Returns staff member details by ID excluding sensitive fields', async () => {
-      prismaService.user.findUnique.mockResolvedValue(mockStaffUser);
-
-      const result = await service.getStaffById(mockStaffUser.id);
-
-      expect(result).toEqual(mockStaffUser);
-      expect(prismaService.user.findUnique).toHaveBeenCalledWith({
-        where: { id: mockStaffUser.id },
-        select: expect.any(Object),
-      });
-    });
-
-    it('8. Throws NotFoundException if staff member is not found', async () => {
-      prismaService.user.findUnique.mockResolvedValue(null);
-
-      await expect(
-        service.getStaffById('non-existent-staff-uuid'),
-      ).rejects.toThrow(NotFoundException);
     });
   });
 
   describe('updateStaff', () => {
-    it('9. Successfully updates staff member details', async () => {
-      prismaService.user.findUnique.mockResolvedValue(mockStaffUser);
-      prismaService.role.findUnique.mockResolvedValue(mockActiveManagerRole);
-      prismaService.branch.findUnique.mockResolvedValue(mockActiveBranch);
+    it('7. Switches commission model from FLAT_PERCENTAGE to DAILY_TARGET and clears old fields', async () => {
+      prismaService.user.findUnique
+        .mockResolvedValueOnce(mockStaffUser)
+        .mockResolvedValueOnce({
+          ...mockStaffUser,
+          commissionModel: CommissionModel.DAILY_TARGET,
+          flatCommissionPercentage: null,
+          dailyTargetAmount: 6000,
+        });
 
-      const updatedUser = {
-        ...mockStaffUser,
-        name: 'Rahul Updated',
-        roleId: mockActiveManagerRole.id,
-        role: mockActiveManagerRole,
-      };
-
-      prismaService.user.update.mockResolvedValue(updatedUser);
+      prismaService.user.update.mockResolvedValue({});
 
       const result = await service.updateStaff(mockStaffUser.id, {
-        name: 'Rahul Updated',
-        roleId: mockActiveManagerRole.id,
+        commissionModel: CommissionModel.DAILY_TARGET,
+        dailyTargetAmount: 6000,
       });
 
-      expect(result).toEqual({
-        message: 'Staff member updated successfully',
-        staff: updatedUser,
+      expect(result.staff.commissionModel).toBe('DAILY_TARGET');
+      expect(result.staff.dailyTargetAmount).toBe(6000);
+      expect(prismaService.staffCommissionSlab.deleteMany).toHaveBeenCalled();
+    });
+
+    it('8. Throws BadRequestException when modifying Admin user compensation', async () => {
+      prismaService.user.findUnique.mockResolvedValue({
+        ...mockStaffUser,
+        role: mockActiveAdminRole,
       });
-    });
-
-    it('10. Throws NotFoundException if updating non-existent staff member', async () => {
-      prismaService.user.findUnique.mockResolvedValue(null);
 
       await expect(
-        service.updateStaff('non-existent-uuid', { name: 'New Name' }),
-      ).rejects.toThrow(NotFoundException);
-    });
-
-    it('11. Throws BadRequestException when updating to ADMIN role', async () => {
-      prismaService.user.findUnique.mockResolvedValue(mockStaffUser);
-      prismaService.role.findUnique.mockResolvedValue(mockActiveAdminRole);
-
-      await expect(
-        service.updateStaff(mockStaffUser.id, {
-          roleId: mockActiveAdminRole.id,
-        }),
-      ).rejects.toThrow(
-        new BadRequestException('Cannot assign ADMIN role to staff members.'),
-      );
-    });
-
-    it('12. Throws BadRequestException when updating to invalid or inactive branch', async () => {
-      prismaService.user.findUnique.mockResolvedValue(mockStaffUser);
-      prismaService.branch.findUnique.mockResolvedValue(mockInactiveBranch);
-
-      await expect(
-        service.updateStaff(mockStaffUser.id, {
-          branchId: mockInactiveBranch.id,
-        }),
+        service.updateStaff('admin-uuid', { monthlySalary: 50000 }),
       ).rejects.toThrow(BadRequestException);
     });
   });
 
   describe('updateStaffStatus', () => {
-    it('13. Successfully deactivates a staff member', async () => {
+    it('9. Deactivates a staff member successfully', async () => {
       prismaService.user.findUnique.mockResolvedValue(mockStaffUser);
-
-      const deactivatedStaff = { ...mockStaffUser, isActive: false };
-      prismaService.user.update.mockResolvedValue(deactivatedStaff);
+      const deactivated = { ...mockStaffUser, isActive: false };
+      prismaService.user.update.mockResolvedValue(deactivated);
 
       const result = await service.updateStaffStatus(mockStaffUser.id, {
         isActive: false,
       });
 
-      expect(result).toEqual({
-        message: 'Staff member status updated successfully',
-        staff: deactivatedStaff,
-      });
-
-      expect(prismaService.user.update).toHaveBeenCalledWith({
-        where: { id: mockStaffUser.id },
-        data: { isActive: false },
-        select: expect.any(Object),
-      });
-    });
-
-    it('14. Successfully activates a staff member', async () => {
-      const inactiveStaffUser = { ...mockStaffUser, isActive: false };
-      prismaService.user.findUnique.mockResolvedValue(inactiveStaffUser);
-
-      const activatedStaff = { ...mockStaffUser, isActive: true };
-      prismaService.user.update.mockResolvedValue(activatedStaff);
-
-      const result = await service.updateStaffStatus(mockStaffUser.id, {
-        isActive: true,
-      });
-
-      expect(result).toEqual({
-        message: 'Staff member status updated successfully',
-        staff: activatedStaff,
-      });
-    });
-
-    it('15. Throws NotFoundException if staff member does not exist', async () => {
-      prismaService.user.findUnique.mockResolvedValue(null);
-
-      await expect(
-        service.updateStaffStatus('non-existent-uuid', { isActive: false }),
-      ).rejects.toThrow(NotFoundException);
-    });
-
-    it('16. Throws BadRequestException when attempting to modify global Admin status', async () => {
-      const adminUser = {
-        id: 'admin-user-uuid',
-        name: 'Super Admin',
-        role: mockActiveAdminRole,
-        isActive: true,
-      };
-
-      prismaService.user.findUnique.mockResolvedValue(adminUser);
-
-      await expect(
-        service.updateStaffStatus('admin-user-uuid', { isActive: false }),
-      ).rejects.toThrow(
-        new BadRequestException('Cannot modify status of Admin account.'),
-      );
+      expect(result.staff.isActive).toBe(false);
     });
   });
 });

@@ -430,4 +430,46 @@ export class AdminBranchesService {
       role: roleNameUpper,
     };
   }
+
+  async getBranchStaffForDropdown(branchId: string) {
+    const branch = await this.prisma.branch.findUnique({
+      where: { id: branchId },
+    });
+
+    if (!branch) {
+      throw new NotFoundException('Branch not found.');
+    }
+
+    if (!branch.isActive) {
+      throw new BadRequestException('Branch is inactive.');
+    }
+
+    const staffMembers = await this.prisma.user.findMany({
+      where: {
+        branchId,
+        isActive: true,
+        role: {
+          name: { in: ['MANAGER', 'STYLIST'] },
+        },
+      },
+      select: {
+        id: true,
+        name: true,
+        role: {
+          select: {
+            name: true,
+          },
+        },
+      },
+      orderBy: {
+        name: 'asc',
+      },
+    });
+
+    return staffMembers.map((s) => ({
+      id: s.id,
+      name: s.name,
+      role: s.role.name,
+    }));
+  }
 }

@@ -34,6 +34,37 @@ model Branch {
 
   users           User[]
   roleCredentials BranchRoleCredential[]
+  servicePricing  BranchServicePricing[]
+  transactions    BranchTransaction[]
+}
+
+model Service {
+  id          String                 @id @default(uuid())
+  name        String                 @unique
+  description String?
+  category    String?
+  durationMin Int?
+  isActive    Boolean                @default(true)
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+
+  branchPricing BranchServicePricing[]
+}
+
+model BranchServicePricing {
+  id        String   @id @default(uuid())
+  branchId  String
+  branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  serviceId String
+  service   Service  @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  price     Float
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([branchId, serviceId])
+  @@index([branchId])
+  @@index([serviceId])
 }
 
 model BranchRoleCredential {
@@ -52,20 +83,80 @@ model BranchRoleCredential {
   @@index([roleId])
 }
 
+enum CommissionModel {
+  FLAT_PERCENTAGE
+  DAILY_TARGET
+  MONTHLY_TARGET
+}
+
+enum TransactionType {
+  GENERAL_EXPENSE
+  EMPLOYEE_ADVANCE
+}
+
+enum PaymentMode {
+  CASH
+  GPAY
+}
+
 model User {
-  id        String   @id @default(uuid())
-  name      String
-  email     String?  @unique
-  pinHash   String?
-  roleId    String
-  role      Role     @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  branchId  String?
-  branch    Branch?  @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                              String                 @id @default(uuid())
+  name                            String
+  email                           String?                @unique
+  pinHash                         String?
+  roleId                          String
+  role                            Role                   @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  branchId                        String?
+  branch                          Branch?                @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  monthlySalary                   Decimal?               @db.Decimal(10, 2)
+  commissionModel                 CommissionModel?
+  flatCommissionPercentage        Decimal?               @db.Decimal(5, 2)
+  dailyTargetAmount               Decimal?               @db.Decimal(10, 2)
+  isActive                        Boolean                @default(true)
+  createdAt                       DateTime               @default(now())
+  updatedAt                       DateTime               @updatedAt
+
+  commissionSlabs                 StaffCommissionSlab[]
+  employeeTransactions            BranchTransaction[]    @relation("EmployeeTransactions")
+  createdTransactions             BranchTransaction[]    @relation("CreatedTransactions")
 
   @@index([roleId])
   @@index([branchId])
   @@index([isActive])
+}
+
+model StaffCommissionSlab {
+  id                   String   @id @default(uuid())
+  userId               String
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  slabOrder            Int
+  minRevenue           Decimal  @db.Decimal(10, 2)
+  commissionPercentage Decimal  @db.Decimal(5, 2)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@unique([userId, slabOrder])
+  @@index([userId])
+}
+
+model BranchTransaction {
+  id          String          @id @default(uuid())
+  branchId    String
+  branch      Branch          @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  type        TransactionType
+  description String
+  amount      Decimal         @db.Decimal(10, 2)
+  paymentMode PaymentMode
+  employeeId  String?
+  employee    User?           @relation("EmployeeTransactions", fields: [employeeId], references: [id], onDelete: Restrict)
+  createdById String
+  createdBy   User            @relation("CreatedTransactions", fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([branchId])
+  @@index([type])
+  @@index([createdAt])
+  @@index([employeeId])
+  @@index([createdById])
 }
