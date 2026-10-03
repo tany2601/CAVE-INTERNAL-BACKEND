@@ -5,6 +5,7 @@ import { SupabaseModule } from './supabase/supabase.module.js';
 import { HealthModule } from './health/health.module.js';
 import { AdminModule } from './admin/admin.module.js';
 import { BranchAuthModule } from './auth/branch/branch-auth.module.js';
+import { SessionsModule } from './staff/sessions/sessions.module.js';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { BranchAuthModule } from './auth/branch/branch-auth.module.js';
     HealthModule,
     AdminModule,
     BranchAuthModule,
+    SessionsModule,
   ],
 })
 export class AppModule {}
