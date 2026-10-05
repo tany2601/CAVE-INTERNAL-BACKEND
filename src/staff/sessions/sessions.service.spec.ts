@@ -31,6 +31,7 @@ describe('SessionsService (Salon Customer Workflow)', () => {
     };
     sessionService: {
       createMany: ReturnType<typeof vi.fn>;
+      deleteMany: ReturnType<typeof vi.fn>;
     };
     sessionProduct: {
       createMany: ReturnType<typeof vi.fn>;
@@ -113,6 +114,7 @@ describe('SessionsService (Salon Customer Workflow)', () => {
       },
       sessionService: {
         createMany: vi.fn(),
+        deleteMany: vi.fn(),
       },
       sessionProduct: {
         createMany: vi.fn(),
@@ -121,6 +123,98 @@ describe('SessionsService (Salon Customer Workflow)', () => {
     };
 
     service = new SessionsService(prisma as unknown as PrismaService);
+  });
+
+  describe('services chosen at check-in', () => {
+    const pricing = (id: string, name: string, price: number) => ({
+      id,
+      price,
+      service: { name },
+    });
+    const sessionRow = (services: unknown[] = []) => ({
+      id: 'session-9',
+      branchId: mockBranch.id,
+      branch: mockBranch,
+      stylist: null,
+      customer: null,
+      customerName: 'Rahul',
+      customerMobile: null,
+      status: SessionStatus.ACTIVE,
+      subtotal: 0,
+      discountType: DiscountType.NONE,
+      discountValue: 0,
+      discountAmount: 0,
+      tipAmount: 0,
+      totalAmount: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      services,
+      products: [],
+    });
+
+    it('stores the picked services (with price snapshots) on the new session', async () => {
+      prisma.branch.findUnique.mockResolvedValue(mockBranch);
+      prisma.branchServicePricing.findMany.mockResolvedValue([
+        pricing('11111111-1111-4111-8111-111111111111', 'Haircut', 300),
+        pricing('22222222-2222-4222-8222-222222222222', 'Beard', 150),
+      ]);
+      prisma.session.create.mockResolvedValue(sessionRow());
+
+      await service.createSession(mockReqUser, {
+        customerName: 'Rahul',
+        serviceIds: [
+          '22222222-2222-4222-8222-222222222222',
+          '11111111-1111-4111-8111-111111111111',
+        ],
+      });
+
+      const data = prisma.session.create.mock.calls[0][0].data;
+      expect(data.services.create).toEqual([
+        { servicePricingId: '22222222-2222-4222-8222-222222222222', serviceName: 'Beard', price: 150 },
+        { servicePricingId: '11111111-1111-4111-8111-111111111111', serviceName: 'Haircut', price: 300 },
+      ]);
+    });
+
+    it('rejects services that are not on this branch menu', async () => {
+      prisma.branch.findUnique.mockResolvedValue(mockBranch);
+      prisma.branchServicePricing.findMany.mockResolvedValue([]);
+      await expect(
+        service.createSession(mockReqUser, {
+          customerName: 'Rahul',
+          serviceIds: ['11111111-1111-4111-8111-111111111111'],
+        }),
+      ).rejects.toThrow(/invalid, inactive, or not on your branch menu/);
+      expect(prisma.session.create).not.toHaveBeenCalled();
+    });
+
+    it('starts the service timer in the same request when startNow is set', async () => {
+      prisma.branch.findUnique.mockResolvedValue(mockBranch);
+      prisma.session.create.mockResolvedValue(sessionRow());
+      await service.createSession(mockReqUser, { customerName: 'Rahul', startNow: true });
+      expect(prisma.session.create.mock.calls[0][0].data.startedAt).toBeInstanceOf(Date);
+    });
+
+    it('does not start the timer unless asked', async () => {
+      prisma.branch.findUnique.mockResolvedValue(mockBranch);
+      prisma.session.create.mockResolvedValue(sessionRow());
+      await service.createSession(mockReqUser, { customerName: 'Rahul' });
+      expect(prisma.session.create.mock.calls[0][0].data.startedAt).toBeUndefined();
+    });
+
+    it('does not re-query relations it already has (create only loads the new services)', async () => {
+      prisma.branch.findUnique.mockResolvedValue(mockBranch);
+      prisma.session.create.mockResolvedValue(sessionRow());
+      await service.createSession(mockReqUser, { customerName: 'Rahul' });
+      expect(prisma.session.create.mock.calls[0][0].include).toEqual({ services: true });
+    });
+
+    it('creates a plain session when no services were picked', async () => {
+      prisma.branch.findUnique.mockResolvedValue(mockBranch);
+      prisma.session.create.mockResolvedValue(sessionRow());
+      await service.createSession(mockReqUser, { customerName: 'Rahul' });
+      expect(prisma.session.create.mock.calls[0][0].data.services).toBeUndefined();
+      expect(prisma.branchServicePricing.findMany).not.toHaveBeenCalled();
+    });
   });
 
   describe('createSession & Customer Workflow', () => {

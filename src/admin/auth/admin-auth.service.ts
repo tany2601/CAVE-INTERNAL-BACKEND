@@ -4,11 +4,13 @@ import {
   NotFoundException,
   BadRequestException,
   UnauthorizedException,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import crypto from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { PinService } from '../../common/security/pin.service.js';
+import { PinVaultService } from '../../common/security/pin-vault.service.js';
 import { SetupAdminDto } from './dto/setup-admin.dto.js';
 import { ChangeAdminPinDto } from './dto/change-admin-pin.dto.js';
 import { AdminLoginDto } from './dto/admin-login.dto.js';
@@ -19,6 +21,7 @@ export class AdminAuthService {
     private readonly prisma: PrismaService,
     private readonly pinService: PinService,
     private readonly configService: ConfigService,
+    @Optional() private readonly pinVault?: PinVaultService,
   ) {}
 
   async setupAdmin(dto: SetupAdminDto) {
@@ -58,6 +61,7 @@ export class AdminAuthService {
         name: dto.name,
         email: dto.email,
         pinHash,
+        pinEncrypted: this.pinVault ? this.pinVault.encrypt(dto.pin) : null,
         roleId: adminRole.id,
         branchId: null,
         isActive: true,
@@ -118,7 +122,10 @@ export class AdminAuthService {
     // 5. Update pinHash in database for logged-in Admin ONLY
     await this.prisma.user.update({
       where: { id: adminId },
-      data: { pinHash: newPinHash },
+      data: {
+        pinHash: newPinHash,
+        pinEncrypted: this.pinVault ? this.pinVault.encrypt(dto.newPin) : null,
+      },
     });
 
     // 6. Return success message without exposing PIN or pinHash
@@ -214,5 +221,26 @@ export class AdminAuthService {
       .digest('base64url');
 
     return `${headerB64}.${payloadB64}.${signatureB64}`;
+  }
+
+  /** The admin's current PIN for the Settings screen (null if only the hash is stored). */
+  async getCurrentPin(adminId: string) {
+    const admin = await this.prisma.user.findUnique({
+      where: { id: adminId },
+      select: { pinEncrypted: true },
+    });
+    if (!admin) throw new NotFoundException('Admin account not found.');
+    return { pin: this.pinVault?.decrypt(admin.pinEncrypted) ?? null };
+  }
+
+  /** Profile shown in the admin shell (name + how many branches they oversee). */
+  async getProfile(adminId: string) {
+    const admin = await this.prisma.user.findUnique({
+      where: { id: adminId },
+      select: { id: true, name: true, email: true },
+    });
+    if (!admin) throw new NotFoundException('Admin account not found.');
+    const branchCount = await this.prisma.branch.count({ where: { isActive: true } });
+    return { ...admin, branchCount };
   }
 }

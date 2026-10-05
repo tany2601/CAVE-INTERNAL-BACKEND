@@ -4,10 +4,12 @@ import {
   NotFoundException,
   BadRequestException,
   InternalServerErrorException,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { PinService } from '../../common/security/pin.service.js';
+import { PinVaultService } from '../../common/security/pin-vault.service.js';
 import { CreateBranchDto } from './dto/create-branch.dto.js';
 import { ListBranchesQueryDto } from './dto/list-branches-query.dto.js';
 import { UpdateBranchDto } from './dto/update-branch.dto.js';
@@ -20,7 +22,118 @@ export class AdminBranchesService {
     private readonly prisma: PrismaService,
     private readonly pinService: PinService,
     private readonly configService: ConfigService,
+    @Optional() private readonly pinVault?: PinVaultService,
   ) {}
+
+  private lookupSecret(): string {
+    const secret = this.configService.get<string>('BRANCH_PIN_LOOKUP_SECRET');
+    if (!secret) {
+      throw new InternalServerErrorException(
+        'BRANCH_PIN_LOOKUP_SECRET is not configured.',
+      );
+    }
+    return secret;
+  }
+
+  /**
+   * Validates the optional manager / stylist PINs of a create or update request and makes
+   * sure none clashes with another branch/role (PIN lookups are globally unique) or with
+   * the other PIN in the same request. Nothing is written, so callers can run this before
+   * touching the database and fail without leaving partial data behind.
+   */
+  private async planRolePins(
+    branchId: string | null,
+    pins: { MANAGER?: string; STYLIST?: string },
+  ) {
+    const entries = Object.entries(pins).filter(([, pin]) => pin !== undefined && pin !== '') as [
+      'MANAGER' | 'STYLIST',
+      string,
+    ][];
+    if (entries.length === 0) return [];
+
+    for (const [, pin] of entries) {
+      if (!this.pinService.validate4DigitPin(pin)) {
+        throw new BadRequestException('PIN must be exactly 4 numeric digits.');
+      }
+    }
+    if (entries.length === 2 && entries[0][1] === entries[1][1]) {
+      throw new ConflictException('Manager and stylist PINs must be different.');
+    }
+
+    const secret = this.lookupSecret();
+    const plan: {
+      roleId: string;
+      pinHash: string;
+      pinLookup: string;
+      pinEncrypted: string | null;
+    }[] = [];
+    for (const [roleName, pin] of entries) {
+      const role = await this.prisma.role.findUnique({ where: { name: roleName } });
+      if (!role || !role.isActive) {
+        throw new BadRequestException('Role is invalid or inactive.');
+      }
+      const pinLookup = this.pinService.generatePinLookup(pin, secret);
+      const clash = await this.prisma.branchRoleCredential.findUnique({
+        where: { pinLookup },
+      });
+      if (clash && (clash.branchId !== branchId || clash.roleId !== role.id)) {
+        throw new ConflictException(
+          `The ${roleName.toLowerCase()} PIN is already assigned to another branch or role.`,
+        );
+      }
+      plan.push({
+        roleId: role.id,
+        pinHash: await this.pinService.hash4DigitPin(pin),
+        pinLookup,
+        pinEncrypted: this.pinVault ? this.pinVault.encrypt(pin) : null,
+      });
+    }
+    return plan;
+  }
+
+  /**
+   * Gives a new branch every active service so its menu isn't empty. Prices start from what
+   * the other branches charge (most recently updated first) and are 0 for services nobody
+   * has priced yet; admins adjust or remove them in Menu pricing.
+   */
+  private async seedMenu(tx: any, branchId: string) {
+    const services = await tx.service.findMany({ where: { isActive: true } });
+    if (services.length === 0) return;
+    const existing = await tx.branchServicePricing.findMany({
+      where: { isActive: true },
+      orderBy: { updatedAt: 'desc' },
+      select: { serviceId: true, price: true },
+    });
+    const priceOf = new Map<string, number>();
+    for (const row of existing) {
+      if (!priceOf.has(row.serviceId)) priceOf.set(row.serviceId, Number(row.price));
+    }
+    await tx.branchServicePricing.createMany({
+      data: services.map((s: { id: string }) => ({
+        branchId,
+        serviceId: s.id,
+        price: priceOf.get(s.id) ?? 0,
+      })),
+    });
+  }
+
+  /** A branch manager must be an active MANAGER already assigned to that branch. */
+  private async assertManager(managerId: string, branchId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: managerId },
+      include: { role: true },
+    });
+    if (
+      !user ||
+      !user.isActive ||
+      user.branchId !== branchId ||
+      user.role?.name !== 'MANAGER'
+    ) {
+      throw new BadRequestException(
+        'Manager must be an active MANAGER assigned to this branch.',
+      );
+    }
+  }
 
   async createBranch(dto: CreateBranchDto) {
     // 1. Check for duplicate branch name
@@ -39,16 +152,31 @@ export class AdminBranchesService {
       throw new ConflictException('Branch with this code already exists.');
     }
 
-    // 3. Create branch record in database
-    const branch = await this.prisma.branch.create({
+    // 3. Validate PINs up front, then create branch + credentials atomically so a failure
+    //    (e.g. a PIN already in use) never leaves a half-created branch behind.
+    const pinPlan = await this.planRolePins(null, {
+      MANAGER: dto.managerPin,
+      STYLIST: dto.stylistPin,
+    });
+    const branch = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.branch.create({
       data: {
         name: dto.name,
         code: dto.code,
         address: dto.address ?? null,
         city: dto.city ?? null,
         state: dto.state ?? null,
+        phone: dto.phone ?? null,
+        imageUrl: dto.imageUrl ?? null,
+        monthlyTarget: dto.monthlyTarget ?? 0,
         isActive: true,
       },
+      });
+      for (const c of pinPlan) {
+        await tx.branchRoleCredential.create({ data: { branchId: created.id, ...c } });
+      }
+      await this.seedMenu(tx, created.id);
+      return created;
     });
 
     return {
@@ -60,6 +188,10 @@ export class AdminBranchesService {
         address: branch.address,
         city: branch.city,
         state: branch.state,
+        phone: branch.phone,
+        imageUrl: branch.imageUrl,
+        monthlyTarget: branch.monthlyTarget,
+        managerId: branch.managerId,
         isActive: branch.isActive,
         createdAt: branch.createdAt,
         updatedAt: branch.updatedAt,
@@ -97,6 +229,10 @@ export class AdminBranchesService {
           address: true,
           city: true,
           state: true,
+          phone: true,
+          imageUrl: true,
+          monthlyTarget: true,
+          managerId: true,
           isActive: true,
           createdAt: true,
           updatedAt: true,
@@ -133,6 +269,10 @@ export class AdminBranchesService {
         address: true,
         city: true,
         state: true,
+        phone: true,
+        imageUrl: true,
+        monthlyTarget: true,
+        managerId: true,
         isActive: true,
         createdAt: true,
         updatedAt: true,
@@ -185,8 +325,28 @@ export class AdminBranchesService {
     if (dto.address !== undefined) updateData.address = dto.address;
     if (dto.city !== undefined) updateData.city = dto.city;
     if (dto.state !== undefined) updateData.state = dto.state;
+    if (dto.phone !== undefined) updateData.phone = dto.phone;
+    if (dto.imageUrl !== undefined) updateData.imageUrl = dto.imageUrl;
+    if (dto.monthlyTarget !== undefined) updateData.monthlyTarget = dto.monthlyTarget;
+    if (dto.managerId !== undefined) {
+      // null un-assigns the manager.
+      if (dto.managerId !== null) await this.assertManager(dto.managerId, id);
+      updateData.managerId = dto.managerId;
+    }
 
-    const updatedBranch = await this.prisma.branch.update({
+    const pinPlan = await this.planRolePins(id, {
+      MANAGER: dto.managerPin,
+      STYLIST: dto.stylistPin,
+    });
+    const updatedBranch = await this.prisma.$transaction(async (tx) => {
+      for (const c of pinPlan) {
+        await tx.branchRoleCredential.upsert({
+          where: { branchId_roleId: { branchId: id, roleId: c.roleId } },
+          create: { branchId: id, ...c },
+          update: c,
+        });
+      }
+      return tx.branch.update({
       where: { id },
       data: updateData,
       select: {
@@ -196,10 +356,15 @@ export class AdminBranchesService {
         address: true,
         city: true,
         state: true,
+        phone: true,
+        imageUrl: true,
+        monthlyTarget: true,
+        managerId: true,
         isActive: true,
         createdAt: true,
         updatedAt: true,
       },
+      });
     });
 
     return {
@@ -218,6 +383,10 @@ export class AdminBranchesService {
         address: true,
         city: true,
         state: true,
+        phone: true,
+        imageUrl: true,
+        monthlyTarget: true,
+        managerId: true,
         isActive: true,
         createdAt: true,
         updatedAt: true,
@@ -245,6 +414,10 @@ export class AdminBranchesService {
         address: true,
         city: true,
         state: true,
+        phone: true,
+        imageUrl: true,
+        monthlyTarget: true,
+        managerId: true,
         isActive: true,
         createdAt: true,
         updatedAt: true,
@@ -323,6 +496,7 @@ export class AdminBranchesService {
     }
 
     const pinHash = await this.pinService.hash4DigitPin(dto.pin);
+    const pinEncrypted = this.pinVault ? this.pinVault.encrypt(dto.pin) : null;
 
     await this.prisma.branchRoleCredential.upsert({
       where: {
@@ -336,10 +510,12 @@ export class AdminBranchesService {
         roleId: role.id,
         pinHash,
         pinLookup,
+        pinEncrypted,
       },
       update: {
         pinHash,
         pinLookup,
+        pinEncrypted,
       },
     });
 
@@ -348,6 +524,30 @@ export class AdminBranchesService {
       branchId,
       role: roleNameUpper,
     };
+  }
+
+  /**
+   * Current PINs for the Settings screen. A PIN is only available if it was set after
+   * viewable PINs were introduced; older ones stay hash-only (value null) until re-set.
+   */
+  async getRolePinValues(branchId: string) {
+    const branch = await this.prisma.branch.findUnique({ where: { id: branchId } });
+    if (!branch) {
+      throw new NotFoundException('Branch not found.');
+    }
+    const credentials = await this.prisma.branchRoleCredential.findMany({
+      where: { branchId },
+      include: { role: true },
+    });
+    const valueOf = (name: string) => {
+      const c = credentials.find((x) => x.role.name.toUpperCase() === name);
+      return {
+        role: name,
+        isConfigured: !!c,
+        pin: c ? (this.pinVault?.decrypt(c.pinEncrypted) ?? null) : null,
+      };
+    };
+    return { branchId, roles: [valueOf('MANAGER'), valueOf('STYLIST')] };
   }
 
   async getRolePinsStatus(branchId: string) {

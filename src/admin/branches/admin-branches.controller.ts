@@ -254,6 +254,17 @@ export class AdminBranchesController {
     return this.adminBranchesService.setRolePin(branchId, roleName, dto);
   }
 
+  @Get(':branchId/role-pins/values')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Current manager / stylist PINs of a branch (where viewable)' })
+  @ApiParam({ name: 'branchId', description: 'UUID of the branch' })
+  async getRolePinValues(@Param('branchId', new ParseUUIDPipe()) branchId: string) {
+    return this.adminBranchesService.getRolePinValues(branchId);
+  }
+
   @Get(':branchId/role-pins')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, RolesGuard)

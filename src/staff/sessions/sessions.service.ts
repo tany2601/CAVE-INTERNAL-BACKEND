@@ -47,7 +47,7 @@ export class SessionsService {
       throw new BadRequestException('Branch is inactive or not found.');
     }
 
-    return { branchId: branch.id, branchName: branch.name };
+    return { branchId: branch.id, branchName: branch.name, branch };
   }
 
   private normalizePhone(phone?: string | null): string | null {
@@ -119,6 +119,8 @@ export class SessionsService {
       closedAt: session.closedAt ?? null,
       durationMin,
       isLoyaltyCounted: session.isLoyaltyCounted ?? false,
+      isEdited: session.isEdited ?? false,
+      editedAt: session.editedAt ?? null,
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
       services: session.services
@@ -172,19 +174,93 @@ export class SessionsService {
   }
 
   async createSession(reqUser: any, dto: CreateSessionDto) {
-    const { branchId } = await this.resolveBranchContext(reqUser);
-
-    let customerId: string | null = null;
+    const { branchId, branch } = await this.resolveBranchContext(reqUser);
     const normalizedPhone = this.normalizePhone(dto.customerMobile);
 
-    if (normalizedPhone) {
-      // Find or create Customer by normalized phone
-      let customer = await this.prisma.customer.findUnique({
-        where: { phone: normalizedPhone },
-      });
+    // These lookups don't depend on each other, so run them together (each one is a round-trip
+    // to the database, which is what made starting a session feel slow).
+    const [existingCustomer, existingActiveSession, stylistUser, pricing] =
+      await Promise.all([
+        normalizedPhone
+          ? this.prisma.customer.findUnique({ where: { phone: normalizedPhone } })
+          : null,
+        // Prevent a duplicate active session for the same registered customer in the branch.
+        normalizedPhone
+          ? this.prisma.session.findFirst({
+              where: {
+                branchId,
+                customerMobile: normalizedPhone,
+                status: SessionStatus.ACTIVE,
+              },
+              include: {
+                branch: { select: { id: true, name: true, code: true } },
+                stylist: { select: { id: true, name: true } },
+                customer: true,
+                services: true,
+                products: true,
+              },
+            })
+          : null,
+        dto.stylistId
+          ? this.prisma.user.findUnique({
+              where: { id: dto.stylistId },
+              include: { role: true },
+            })
+          : null,
+        dto.serviceIds?.length
+          ? this.prisma.branchServicePricing.findMany({
+              where: {
+                id: { in: dto.serviceIds },
+                branchId,
+                isActive: true,
+                service: { isActive: true },
+              },
+              include: { service: true },
+            })
+          : [],
+      ]);
 
+    if (existingActiveSession) {
+      return {
+        message: 'Active session already exists for this customer',
+        session: this.formatSessionOutput(existingActiveSession),
+      };
+    }
+
+    // Validate optional stylistId if provided during session creation
+    let stylist: { id: string; name: string } | null = null;
+    if (dto.stylistId) {
+      if (
+        !stylistUser ||
+        !stylistUser.isActive ||
+        stylistUser.branchId !== branchId ||
+        !['STYLIST', 'MANAGER'].includes(stylistUser.role?.name || '')
+      ) {
+        throw new BadRequestException(
+          'Selected stylist is invalid, inactive, or does not belong to your branch.',
+        );
+      }
+      stylist = { id: stylistUser.id, name: stylistUser.name };
+    }
+
+    // Services picked at check-in must be live items on this branch's menu.
+    let preselected: { servicePricingId: string; serviceName: string; price: number }[] = [];
+    if (dto.serviceIds?.length) {
+      if (pricing.length !== dto.serviceIds.length) {
+        throw new BadRequestException(
+          'One or more selected services are invalid, inactive, or not on your branch menu.',
+        );
+      }
+      preselected = dto.serviceIds.map((id) => {
+        const p = pricing.find((x) => x.id === id)!;
+        return { servicePricingId: p.id, serviceName: p.service.name, price: p.price };
+      });
+    }
+
+    // Find or create the customer (loyalty is tracked by phone).
+    let customer = existingCustomer;
+    if (normalizedPhone) {
       if (customer) {
-        // Update customer name if provided
         if (customer.name !== dto.customerName) {
           customer = await this.prisma.customer.update({
             where: { id: customer.id },
@@ -201,74 +277,33 @@ export class SessionsService {
           },
         });
       }
-      customerId = customer.id;
-
-      // Prevent duplicate active session for the same registered customer in the branch
-      const existingActiveSession = await this.prisma.session.findFirst({
-        where: {
-          branchId,
-          customerId: customer.id,
-          status: SessionStatus.ACTIVE,
-        },
-        include: {
-          branch: { select: { id: true, name: true, code: true } },
-          stylist: { select: { id: true, name: true } },
-          customer: true,
-          services: true,
-          products: true,
-        },
-      });
-
-      if (existingActiveSession) {
-        return {
-          message: 'Active session already exists for this customer',
-          session: this.formatSessionOutput(existingActiveSession),
-        };
-      }
     }
 
-    // Validate optional stylistId if provided during session creation
-    let stylistId: string | null = null;
-    if (dto.stylistId) {
-      const stylistUser = await this.prisma.user.findUnique({
-        where: { id: dto.stylistId },
-        include: { role: true },
-      });
-
-      if (
-        !stylistUser ||
-        !stylistUser.isActive ||
-        stylistUser.branchId !== branchId ||
-        !['STYLIST', 'MANAGER'].includes(stylistUser.role?.name || '')
-      ) {
-        throw new BadRequestException(
-          'Selected stylist is invalid, inactive, or does not belong to your branch.',
-        );
-      }
-      stylistId = stylistUser.id;
-    }
-
-    const session = await this.prisma.session.create({
+    const created = await this.prisma.session.create({
       data: {
         branchId,
-        stylistId,
-        customerId,
+        stylistId: stylist?.id ?? null,
+        customerId: customer?.id ?? null,
         customerName: dto.customerName,
         customerMobile: normalizedPhone,
         status: SessionStatus.ACTIVE,
+        // startNow begins the service timer in the same request (saves a second round-trip).
+        ...(dto.startNow ? { startedAt: new Date() } : {}),
+        ...(preselected.length ? { services: { create: preselected } } : {}),
       },
-      include: {
-        branch: { select: { id: true, name: true, code: true } },
-        stylist: { select: { id: true, name: true } },
-        customer: true,
-        services: true,
-        products: true,
-      },
+      include: { services: true },
     });
 
+    // Everything else in the response is already in hand, so no extra relation queries.
     return {
       message: 'Customer session created successfully',
-      session: this.formatSessionOutput(session),
+      session: this.formatSessionOutput({
+        ...created,
+        branch,
+        stylist,
+        customer,
+        products: [],
+      }),
     };
   }
 
@@ -421,42 +456,8 @@ export class SessionsService {
     return this.formatSessionOutput(session);
   }
 
-  async closeSession(reqUser: any, sessionId: string, dto: CloseSessionDto) {
-    const { branchId } = await this.resolveBranchContext(reqUser);
-
-    const session = await this.prisma.session.findUnique({
-      where: { id: sessionId },
-      include: {
-        branch: { select: { id: true, name: true, code: true } },
-        stylist: { select: { id: true, name: true } },
-        customer: true,
-        services: true,
-        products: true,
-      },
-    });
-
-    if (!session) {
-      throw new NotFoundException('Session not found.');
-    }
-
-    if (session.branchId !== branchId) {
-      throw new ForbiddenException(
-        'Access denied: Cannot close sessions belonging to another branch.',
-      );
-    }
-
-    // Idempotency: Return existing completed session if already closed
-    if (session.status === SessionStatus.COMPLETED) {
-      return {
-        message: 'Session is already closed and billed',
-        session: this.formatSessionOutput(session),
-      };
-    }
-
-    if (session.status !== SessionStatus.ACTIVE) {
-      throw new BadRequestException('Session is inactive or cancelled.');
-    }
-
+  /** Validates the bill lines against branch pricing and computes all totals. */
+  private async computeBilling(branchId: string, dto: CloseSessionDto) {
     const hasServices = dto.services && dto.services.length > 0;
     const hasCustomServices = dto.customServices && dto.customServices.length > 0;
     const hasProducts = dto.productSales && dto.productSales.length > 0;
@@ -600,6 +601,67 @@ export class SessionsService {
     const afterDiscountSubtotal = this.round2(preDiscountSubtotal - discountAmount);
     const totalAmount = this.round2(afterDiscountSubtotal + tipAmount);
 
+    return {
+      menuServiceItems,
+      customServiceItems,
+      productItems,
+      preDiscountSubtotal,
+      discountType,
+      discountValue,
+      discountAmount,
+      tipAmount,
+      totalAmount,
+    };
+  }
+
+  async closeSession(reqUser: any, sessionId: string, dto: CloseSessionDto) {
+    const { branchId } = await this.resolveBranchContext(reqUser);
+
+    const session = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+      include: {
+        branch: { select: { id: true, name: true, code: true } },
+        stylist: { select: { id: true, name: true } },
+        customer: true,
+        services: true,
+        products: true,
+      },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Session not found.');
+    }
+
+    if (session.branchId !== branchId) {
+      throw new ForbiddenException(
+        'Access denied: Cannot close sessions belonging to another branch.',
+      );
+    }
+
+    // Idempotency: Return existing completed session if already closed
+    if (session.status === SessionStatus.COMPLETED) {
+      return {
+        message: 'Session is already closed and billed',
+        session: this.formatSessionOutput(session),
+      };
+    }
+
+    if (session.status !== SessionStatus.ACTIVE) {
+      throw new BadRequestException('Session is inactive or cancelled.');
+    }
+
+    const {
+      menuServiceItems,
+      customServiceItems,
+      productItems,
+      preDiscountSubtotal,
+      discountType,
+      discountValue,
+      discountAmount,
+      tipAmount,
+      totalAmount,
+    } = await this.computeBilling(branchId, dto);
+
     const closedAt = new Date();
     const startedAt = session.startedAt || session.createdAt;
 
@@ -623,7 +685,8 @@ export class SessionsService {
         },
       });
 
-      // 2. Create SessionService records
+      // 2. Create SessionService records (replacing any services pre-selected at check-in)
+      await tx.sessionService.deleteMany({ where: { sessionId } });
       const allServices = [...menuServiceItems, ...customServiceItems];
       if (allServices.length > 0) {
         await tx.sessionService.createMany({
@@ -685,5 +748,130 @@ export class SessionsService {
       message: 'Session closed and billed successfully',
       session: this.formatSessionOutput(closedSession),
     };
+  }
+
+  /** Manager correction of an already billed session. Replaces line items and totals. */
+  async editSession(reqUser: any, sessionId: string, dto: CloseSessionDto) {
+    const { branchId } = await this.resolveBranchContext(reqUser);
+
+    const session = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+    });
+    if (!session) throw new NotFoundException('Session not found.');
+    if (session.branchId !== branchId) {
+      throw new ForbiddenException(
+        'Access denied: Cannot modify sessions belonging to another branch.',
+      );
+    }
+    if (session.status !== SessionStatus.COMPLETED) {
+      throw new BadRequestException('Only billed sessions can be edited.');
+    }
+
+    const billing = await this.computeBilling(branchId, dto);
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.sessionService.deleteMany({ where: { sessionId } });
+      await tx.sessionProduct.deleteMany({ where: { sessionId } });
+
+      const allServices = [
+        ...billing.menuServiceItems,
+        ...billing.customServiceItems,
+      ];
+      if (allServices.length > 0) {
+        await tx.sessionService.createMany({
+          data: allServices.map((item) => ({
+            sessionId,
+            servicePricingId: item.servicePricingId || null,
+            serviceName: item.serviceName,
+            price: item.price,
+            isCustom: item.isCustom,
+          })),
+        });
+      }
+      if (billing.productItems.length > 0) {
+        await tx.sessionProduct.createMany({
+          data: billing.productItems.map((item) => ({
+            sessionId,
+            productName: item.productName,
+            price: item.price,
+            paymentMode: item.paymentMode,
+          })),
+        });
+      }
+
+      await tx.session.update({
+        where: { id: sessionId },
+        data: {
+          subtotal: billing.preDiscountSubtotal,
+          discountType: billing.discountType,
+          discountValue: billing.discountValue,
+          discountAmount: billing.discountAmount,
+          tipAmount: billing.tipAmount,
+          totalAmount: billing.totalAmount,
+          paymentMode: dto.paymentMode,
+          isEdited: true,
+          editedAt: new Date(),
+        },
+      });
+
+      return tx.session.findUnique({
+        where: { id: sessionId },
+        include: {
+          branch: { select: { id: true, name: true, code: true } },
+          stylist: { select: { id: true, name: true } },
+          customer: true,
+          services: true,
+          products: true,
+        },
+      });
+    });
+
+    return {
+      message: 'Session updated successfully',
+      session: this.formatSessionOutput(updated),
+    };
+  }
+
+  /** Voids a session (kept for audit as CANCELLED) and rolls back its loyalty credit. */
+  async cancelSession(reqUser: any, sessionId: string) {
+    const { branchId } = await this.resolveBranchContext(reqUser);
+
+    const session = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+    });
+    if (!session) throw new NotFoundException('Session not found.');
+    if (session.branchId !== branchId) {
+      throw new ForbiddenException(
+        'Access denied: Cannot modify sessions belonging to another branch.',
+      );
+    }
+    if (session.status === SessionStatus.CANCELLED) {
+      return { message: 'Session already deleted' };
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.session.update({
+        where: { id: sessionId },
+        data: { status: SessionStatus.CANCELLED, isLoyaltyCounted: false },
+      });
+
+      if (session.isLoyaltyCounted && session.customerId) {
+        const customer = await tx.customer.findUnique({
+          where: { id: session.customerId },
+        });
+        if (customer) {
+          const count = Math.max(0, customer.qualifyingCompletedSessionsCount - 1);
+          await tx.customer.update({
+            where: { id: customer.id },
+            data: {
+              qualifyingCompletedSessionsCount: count,
+              rewardEarned: count > 0 && count % 6 === 0,
+            },
+          });
+        }
+      }
+    });
+
+    return { message: 'Session deleted successfully' };
   }
 }

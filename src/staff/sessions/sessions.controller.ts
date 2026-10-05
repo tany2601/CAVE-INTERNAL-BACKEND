@@ -3,6 +3,7 @@ import {
   Post,
   Get,
   Patch,
+  Delete,
   Body,
   Param,
   Req,
@@ -255,5 +256,42 @@ export class SessionsController {
     @Req() req: any,
   ) {
     return this.sessionsService.closeSession(req.user, id, dto);
+  }
+
+  @Patch(':id')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('MANAGER')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Edit a billed session (manager only)',
+    description:
+      'Replaces the services, products, discount, tip and payment mode of a completed session and flags it as edited.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID of the completed session' })
+  async editSession(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: CloseSessionDto,
+    @Req() req: any,
+  ) {
+    return this.sessionsService.editSession(req.user, id, dto);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('MANAGER')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Delete (void) a session (manager only)',
+    description:
+      'Marks the session CANCELLED so it no longer counts toward revenue, commission or loyalty.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID of the session' })
+  async cancelSession(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: any,
+  ) {
+    return this.sessionsService.cancelSession(req.user, id);
   }
 }

@@ -6,6 +6,7 @@ import { HealthModule } from './health/health.module.js';
 import { AdminModule } from './admin/admin.module.js';
 import { BranchAuthModule } from './auth/branch/branch-auth.module.js';
 import { SessionsModule } from './staff/sessions/sessions.module.js';
+import { BranchOpsModule } from './staff/branch/branch.module.js';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { SessionsModule } from './staff/sessions/sessions.module.js';
     AdminModule,
     BranchAuthModule,
     SessionsModule,
+    BranchOpsModule,
   ],
 })
 export class AppModule {}

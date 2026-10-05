@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Patch,
+  Get,
   Body,
   HttpCode,
   HttpStatus,
@@ -78,6 +79,26 @@ export class AdminAuthController {
   @ApiResponse({ status: 409, description: 'Admin account already exists' })
   async setupAdmin(@Body() dto: SetupAdminDto) {
     return this.adminAuthService.setupAdmin(dto);
+  }
+
+  @Get('me')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Logged-in Admin profile' })
+  async me(@CurrentUser('id') adminId: string) {
+    return this.adminAuthService.getProfile(adminId);
+  }
+
+  @Get('pin')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Current Admin PIN (null if not viewable yet)' })
+  async currentPin(@CurrentUser('id') adminId: string) {
+    return this.adminAuthService.getCurrentPin(adminId);
   }
 
   @Patch('pin')

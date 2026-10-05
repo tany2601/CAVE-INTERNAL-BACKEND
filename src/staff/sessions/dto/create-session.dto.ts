@@ -4,8 +4,13 @@ import {
   IsNotEmpty,
   IsOptional,
   MaxLength,
+  MinLength,
   Matches,
   IsUUID,
+  IsArray,
+  IsBoolean,
+  ArrayMaxSize,
+  ArrayUnique,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 
@@ -16,6 +21,10 @@ export class CreateSessionDto {
   })
   @IsString()
   @IsNotEmpty({ message: 'Customer name is required.' })
+  @MinLength(3, { message: 'Please enter your real name.' })
+  @Matches(/^\p{L}[\p{L}\p{M}\s.'’-]*$/u, {
+    message: 'Name can only contain letters, spaces and . \' -',
+  })
   @MaxLength(100, { message: 'Customer name must not exceed 100 characters.' })
   @Transform(({ value }: { value?: string }) => value?.trim())
   customerName: string;
@@ -27,9 +36,9 @@ export class CreateSessionDto {
   })
   @IsOptional()
   @IsString()
-  @Matches(/^(\+?[1-9]\d{1,14}|\d{10})$/, {
+  @Matches(/^(\+91)?[6-9]\d{9}$/, {
     message:
-      'Invalid mobile number format. Must be a 10-digit number or E.164 international format.',
+      'Invalid mobile number. Must be a 10-digit Indian mobile number starting with 6-9 (optionally prefixed with +91).',
   })
   @Transform(({ value }: { value?: string }) => (value ? value.trim() : value))
   customerMobile?: string;
@@ -42,4 +51,23 @@ export class CreateSessionDto {
   @IsOptional()
   @IsUUID('4', { message: 'stylistId must be a valid UUID v4.' })
   stylistId?: string;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      'Optional branch menu items (servicePricingIds) the customer picked while checking in. They are pre-selected when the session is billed.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(30, { message: 'Too many services selected.' })
+  @ArrayUnique({ message: 'Services must not repeat.' })
+  @IsUUID('4', { each: true, message: 'Each service must be a valid UUID v4.' })
+  serviceIds?: string[];
+
+  @ApiPropertyOptional({
+    description: 'Start the service timer right away instead of calling start-service afterwards.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  startNow?: boolean;
 }

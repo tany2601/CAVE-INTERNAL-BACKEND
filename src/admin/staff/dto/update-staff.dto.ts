@@ -5,6 +5,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   Max,
   Min,
   ValidateNested,
@@ -20,6 +21,9 @@ export class UpdateStaffDto {
   })
   @IsOptional()
   @IsString({ message: 'Name must be a string.' })
+  @Matches(/^\p{L}[\p{L}\p{M}\s.'’-]*$/u, {
+    message: 'Name can only contain letters, spaces and . \' -',
+  })
   name?: string;
 
   @ApiPropertyOptional({
@@ -90,4 +94,29 @@ export class UpdateStaffDto {
   @ValidateNested({ each: true })
   @Type(() => CreateStaffSlabDto)
   commissionSlabs?: CreateStaffSlabDto[];
+
+  @ApiPropertyOptional({ example: '9876543210', description: 'Contact phone number' })
+  @IsOptional()
+  @IsString({ message: 'phone must be a string.' })
+  @Matches(/^[6-9]\d{9}$/, { message: 'phone must be a valid 10-digit mobile number.' })
+  phone?: string;
+
+  @ApiPropertyOptional({ description: 'Public URL of the staff photo' })
+  @IsOptional()
+  @IsString({ message: 'photoUrl must be a string.' })
+  photoUrl?: string;
+
+  @ApiPropertyOptional({ example: 9000, description: 'Daily revenue target' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({}, { message: 'dailyRevenueTarget must be a number.' })
+  @Min(0, { message: 'dailyRevenueTarget must be non-negative.' })
+  dailyRevenueTarget?: number;
+
+  @ApiPropertyOptional({ example: 250000, description: 'Monthly revenue target' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({}, { message: 'monthlyRevenueTarget must be a number.' })
+  @Min(0, { message: 'monthlyRevenueTarget must be non-negative.' })
+  monthlyRevenueTarget?: number;
 }

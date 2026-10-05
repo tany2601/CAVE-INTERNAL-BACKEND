@@ -22,32 +22,45 @@ model Role {
 }
 
 model Branch {
-  id        String   @id @default(uuid())
-  name      String   @unique
-  code      String   @unique
-  address   String?
-  city      String?
-  state     String?
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            String   @id @default(uuid())
+  name          String   @unique
+  code          String   @unique
+  address       String?
+  city          String?
+  state         String?
+  phone         String?
+  imageUrl      String?
+  // Revenue goal for the month, shown on admin branch cards.
+  monthlyTarget Float    @default(0)
+  managerId     String?
+  manager       User?    @relation("BranchManager", fields: [managerId], references: [id], onDelete: SetNull)
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  users           User[]
-  roleCredentials BranchRoleCredential[]
-  servicePricing  BranchServicePricing[]
-  transactions    BranchTransaction[]
-  sessions        Session[]
+  users                User[]
+  roleCredentials      BranchRoleCredential[]
+  servicePricing       BranchServicePricing[]
+  transactions         BranchTransaction[]
+  sessions             Session[]
+  dailyBalances        DailyBalance[]
+  staffPayouts         StaffPayout[]
+  salaryPayments       SalaryPayment[]
+  checklistTasks       ChecklistTask[]
+  checklistCompletions ChecklistCompletion[]
+
+  @@index([managerId])
 }
 
 model Service {
-  id          String                 @id @default(uuid())
-  name        String                 @unique
+  id          String   @id @default(uuid())
+  name        String   @unique
   description String?
   category    String?
   durationMin Int?
-  isActive    Boolean                @default(true)
-  createdAt   DateTime               @default(now())
-  updatedAt   DateTime               @updatedAt
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   branchPricing BranchServicePricing[]
 }
@@ -71,15 +84,17 @@ model BranchServicePricing {
 }
 
 model BranchRoleCredential {
-  id        String   @id @default(uuid())
-  branchId  String
-  branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  roleId    String
-  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  pinHash   String
-  pinLookup String   @unique
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           String   @id @default(uuid())
+  branchId     String
+  branch       Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  roleId       String
+  role         Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  pinHash      String
+  pinLookup    String   @unique
+  // Reversible copy (AES-GCM) so admins can view the PIN in Settings. Null until the PIN is next set.
+  pinEncrypted String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   @@unique([branchId, roleId])
   @@index([branchId])
@@ -115,26 +130,35 @@ enum DiscountType {
 }
 
 model User {
-  id                              String                 @id @default(uuid())
-  name                            String
-  email                           String?                @unique
-  pinHash                         String?
-  roleId                          String
-  role                            Role                   @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  branchId                        String?
-  branch                          Branch?                @relation(fields: [branchId], references: [id], onDelete: Restrict)
-  monthlySalary                   Decimal?               @db.Decimal(10, 2)
-  commissionModel                 CommissionModel?
-  flatCommissionPercentage        Decimal?               @db.Decimal(5, 2)
-  dailyTargetAmount               Decimal?               @db.Decimal(10, 2)
-  isActive                        Boolean                @default(true)
-  createdAt                       DateTime               @default(now())
-  updatedAt                       DateTime               @updatedAt
+  id                       String           @id @default(uuid())
+  name                     String
+  email                    String?          @unique
+  pinHash                  String?
+  pinEncrypted             String?
+  roleId                   String
+  role                     Role             @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  branchId                 String?
+  branch                   Branch?          @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  phone                    String?
+  photoUrl                 String?
+  monthlySalary            Decimal?         @db.Decimal(10, 2)
+  // Performance targets (independent of the commission model).
+  dailyRevenueTarget       Decimal?         @db.Decimal(10, 2)
+  monthlyRevenueTarget     Decimal?         @db.Decimal(12, 2)
+  commissionModel          CommissionModel?
+  flatCommissionPercentage Decimal?         @db.Decimal(5, 2)
+  dailyTargetAmount        Decimal?         @db.Decimal(10, 2)
+  isActive                 Boolean          @default(true)
+  createdAt                DateTime         @default(now())
+  updatedAt                DateTime         @updatedAt
 
-  commissionSlabs                 StaffCommissionSlab[]
-  employeeTransactions            BranchTransaction[]    @relation("EmployeeTransactions")
-  createdTransactions             BranchTransaction[]    @relation("CreatedTransactions")
-  stylistSessions                 Session[]              @relation("StylistSessions")
+  commissionSlabs      StaffCommissionSlab[]
+  employeeTransactions BranchTransaction[]   @relation("EmployeeTransactions")
+  createdTransactions  BranchTransaction[]   @relation("CreatedTransactions")
+  stylistSessions      Session[]             @relation("StylistSessions")
+  managedBranches      Branch[]              @relation("BranchManager")
+  payouts              StaffPayout[]
+  salaryPayments       SalaryPayment[]
 
   @@index([roleId])
   @@index([branchId])
@@ -212,6 +236,8 @@ model Session {
   startedAt        DateTime?
   closedAt         DateTime?
   isLoyaltyCounted Boolean       @default(false)
+  isEdited         Boolean       @default(false)
+  editedAt         DateTime?
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 
@@ -252,4 +278,116 @@ model SessionProduct {
   updatedAt   DateTime    @updatedAt
 
   @@index([sessionId])
+}
+
+enum PayoutKind {
+  COMMISSION
+  TIP_WITHDRAWAL
+}
+
+enum SalaryVia {
+  CASH
+  GPAY
+  BANK_TRANSFER
+}
+
+/// Morning opening and evening closing cash/GPay balances, one row per branch per day.
+model DailyBalance {
+  id           String    @id @default(uuid())
+  branchId     String
+  branch       Branch    @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  date         DateTime  @db.Date
+  openingCash  Decimal   @default(0.00) @db.Decimal(12, 2)
+  openingGpay  Decimal   @default(0.00) @db.Decimal(12, 2)
+  openingSetAt DateTime?
+  expectedCash Decimal?  @db.Decimal(12, 2)
+  expectedGpay Decimal?  @db.Decimal(12, 2)
+  closingCash  Decimal?  @db.Decimal(12, 2)
+  closingGpay  Decimal?  @db.Decimal(12, 2)
+  closedAt     DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([branchId, date])
+  @@index([branchId])
+}
+
+/// Commission payouts and tip withdrawals handed to staff (the payout ledger).
+model StaffPayout {
+  id          String      @id @default(uuid())
+  branchId    String
+  branch      Branch      @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  kind        PayoutKind  @default(COMMISSION)
+  amount      Decimal     @db.Decimal(10, 2)
+  paymentMode PaymentMode
+  forDate     DateTime    @db.Date
+  note        String?
+  createdAt   DateTime    @default(now())
+
+  @@index([branchId, forDate])
+  @@index([userId])
+}
+
+/// Monthly salary payments recorded from the admin payroll screen.
+model SalaryPayment {
+  id        String    @id @default(uuid())
+  branchId  String?
+  branch    Branch?   @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  amount    Decimal   @db.Decimal(10, 2)
+  via       SalaryVia @default(GPAY)
+  note      String?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+/// Daily checklist template. branchId = null means the task applies to every branch.
+model ChecklistTask {
+  id          String   @id @default(uuid())
+  branchId    String?
+  branch      Branch?  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  task        String
+  description String?
+  sortOrder   Int      @default(0)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  completions ChecklistCompletion[]
+
+  @@index([branchId])
+}
+
+/// A checklist task ticked off at a branch on a given day.
+model ChecklistCompletion {
+  id          String        @id @default(uuid())
+  taskId      String
+  task        ChecklistTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  branchId    String
+  branch      Branch        @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  date        DateTime      @db.Date
+  completedAt DateTime      @default(now())
+
+  @@unique([taskId, branchId, date])
+  @@index([branchId, date])
+}
+
+/// Retail products sold at checkout (shown in the billing screen and managed by admins).
+model Product {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  price       Decimal  @db.Decimal(10, 2)
+  imageUrl    String?
+  category    String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isActive])
 }

@@ -25,7 +25,9 @@
     "db:validate": "prisma validate",
     "db:migrate": "prisma migrate dev",
     "db:seed": "prisma db seed",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "db:seed:sample": "tsx prisma/seed-sample.ts",
+    "db:recover-pins": "tsx prisma/recover-pins.ts"
   },
   "prisma": {
     "seed": "npx tsx prisma/seed.ts"

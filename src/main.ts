@@ -47,6 +47,7 @@ async function bootstrap() {
     },
   });
 
-  await app.listen(port);
+  // Behind nginx the API only needs to listen on localhost (set HOST=0.0.0.0 to expose it directly).
+  await app.listen(port, configService.get<string>('HOST') || '0.0.0.0');
 }
 bootstrap();

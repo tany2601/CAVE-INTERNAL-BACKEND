@@ -9,6 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import { AdminAuthService } from './admin-auth.service.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { PinService } from '../../common/security/pin.service.js';
+import { PinVaultService } from '../../common/security/pin-vault.service.js';
 
 describe('AdminAuthService', () => {
   let service: AdminAuthService;
@@ -70,6 +71,13 @@ describe('AdminAuthService', () => {
         { provide: PrismaService, useValue: prismaService },
         { provide: PinService, useValue: pinService },
         { provide: ConfigService, useValue: configService },
+        {
+          provide: PinVaultService,
+          useValue: {
+            encrypt: (pin: string) => `enc:${pin}`,
+            decrypt: (blob: string | null) => (blob ? blob.replace('enc:', '') : null),
+          },
+        },
       ],
     }).compile();
 
@@ -251,7 +259,7 @@ describe('AdminAuthService', () => {
       expect(result).toEqual({ message: 'Admin PIN changed successfully' });
       expect(prismaService.user.update).toHaveBeenCalledWith({
         where: { id: adminId },
-        data: { pinHash: '$2b$10$newPinHashValue789' },
+        data: { pinHash: '$2b$10$newPinHashValue789', pinEncrypted: 'enc:739214' },
       });
     });
 
@@ -296,7 +304,7 @@ describe('AdminAuthService', () => {
       expect(pinService.hashPin).toHaveBeenCalledWith('739214');
       expect(prismaService.user.update).toHaveBeenCalledWith({
         where: { id: adminId },
-        data: { pinHash: '$2b$10$hashedNewPin' },
+        data: { pinHash: '$2b$10$hashedNewPin', pinEncrypted: 'enc:739214' },
       });
     });
 
@@ -418,6 +426,18 @@ describe('AdminAuthService', () => {
         alg: 'HS256',
         typ: 'JWT',
       });
+    });
+  });
+
+  describe('getCurrentPin', () => {
+    it('returns the decrypted PIN when a viewable copy exists', async () => {
+      prismaService.user.findUnique.mockResolvedValue({ pinEncrypted: 'enc:202600' });
+      expect(await service.getCurrentPin('admin-1')).toEqual({ pin: '202600' });
+    });
+
+    it('returns null for accounts that only have the hash', async () => {
+      prismaService.user.findUnique.mockResolvedValue({ pinEncrypted: null });
+      expect(await service.getCurrentPin('admin-1')).toEqual({ pin: null });
     });
   });
 });

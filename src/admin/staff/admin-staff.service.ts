@@ -148,6 +148,16 @@ export class AdminStaffService {
         staff.monthlySalary !== null && staff.monthlySalary !== undefined
           ? Number(staff.monthlySalary)
           : null,
+      phone: staff.phone ?? null,
+      photoUrl: staff.photoUrl ?? null,
+      dailyRevenueTarget:
+        staff.dailyRevenueTarget !== null && staff.dailyRevenueTarget !== undefined
+          ? Number(staff.dailyRevenueTarget)
+          : null,
+      monthlyRevenueTarget:
+        staff.monthlyRevenueTarget !== null && staff.monthlyRevenueTarget !== undefined
+          ? Number(staff.monthlyRevenueTarget)
+          : null,
       commissionModel: staff.commissionModel ?? null,
       flatCommissionPercentage:
         staff.flatCommissionPercentage !== null &&
@@ -212,6 +222,10 @@ export class AdminStaffService {
           roleId: dto.roleId,
           branchId: dto.branchId,
           monthlySalary: dto.monthlySalary ?? null,
+          phone: dto.phone ?? null,
+          photoUrl: dto.photoUrl ?? null,
+          dailyRevenueTarget: dto.dailyRevenueTarget ?? null,
+          monthlyRevenueTarget: dto.monthlyRevenueTarget ?? null,
           commissionModel: dto.commissionModel ?? null,
           flatCommissionPercentage:
             dto.commissionModel === CommissionModel.FLAT_PERCENTAGE
@@ -264,6 +278,10 @@ export class AdminStaffService {
             },
           },
           monthlySalary: true,
+          phone: true,
+          photoUrl: true,
+          dailyRevenueTarget: true,
+          monthlyRevenueTarget: true,
           commissionModel: true,
           flatCommissionPercentage: true,
           dailyTargetAmount: true,
@@ -346,6 +364,10 @@ export class AdminStaffService {
             },
           },
           monthlySalary: true,
+          phone: true,
+          photoUrl: true,
+          dailyRevenueTarget: true,
+          monthlyRevenueTarget: true,
           commissionModel: true,
           flatCommissionPercentage: true,
           dailyTargetAmount: true,
@@ -410,6 +432,10 @@ export class AdminStaffService {
           },
         },
         monthlySalary: true,
+        phone: true,
+        photoUrl: true,
+        dailyRevenueTarget: true,
+        monthlyRevenueTarget: true,
         commissionModel: true,
         flatCommissionPercentage: true,
         dailyTargetAmount: true,
@@ -528,6 +554,12 @@ export class AdminStaffService {
       if (dto.branchId !== undefined) updateUserData.branchId = dto.branchId;
       if (dto.monthlySalary !== undefined)
         updateUserData.monthlySalary = dto.monthlySalary;
+      if (dto.phone !== undefined) updateUserData.phone = dto.phone;
+      if (dto.photoUrl !== undefined) updateUserData.photoUrl = dto.photoUrl;
+      if (dto.dailyRevenueTarget !== undefined)
+        updateUserData.dailyRevenueTarget = dto.dailyRevenueTarget;
+      if (dto.monthlyRevenueTarget !== undefined)
+        updateUserData.monthlyRevenueTarget = dto.monthlyRevenueTarget;
 
       if (dto.commissionModel !== undefined) {
         updateUserData.commissionModel = dto.commissionModel;
@@ -593,6 +625,10 @@ export class AdminStaffService {
             },
           },
           monthlySalary: true,
+          phone: true,
+          photoUrl: true,
+          dailyRevenueTarget: true,
+          monthlyRevenueTarget: true,
           commissionModel: true,
           flatCommissionPercentage: true,
           dailyTargetAmount: true,
@@ -662,6 +698,10 @@ export class AdminStaffService {
           },
         },
         monthlySalary: true,
+        phone: true,
+        photoUrl: true,
+        dailyRevenueTarget: true,
+        monthlyRevenueTarget: true,
         commissionModel: true,
         flatCommissionPercentage: true,
         dailyTargetAmount: true,
