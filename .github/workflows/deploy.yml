@@ -1,0 +1,46 @@
+name: Deploy CAVE Backend
+
+on:
+  push:
+    branches:
+      - develop-thanay
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy backend
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            set -e
+
+            cd /var/www/paperlighttech/cave/CAVE-INTERNAL-BACKEND
+
+            echo "Pulling latest backend code..."
+            git fetch origin
+            git reset --hard origin/develop-thanay
+
+            echo "Installing dependencies..."
+            npm ci
+
+            echo "Generating Prisma client..."
+            npx prisma generate
+
+            echo "Building backend..."
+            npm run build
+
+            echo "Restarting CAVE API..."
+            pm2 restart cave-api --update-env
+
+            echo "Waiting for API..."
+            sleep 3
+
+            echo "Running health check..."
+            curl -f http://127.0.0.1:4002/api/health
+
+            echo "CAVE backend deployment successful."
