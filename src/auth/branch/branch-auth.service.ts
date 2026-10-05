@@ -49,7 +49,9 @@ export class BranchAuthService {
     const pinLookup = this.pinService.generatePinLookup(dto.pin, lookupSecret);
 
     // 5. Find matching credential in BranchRoleCredential
+    // `join` fetches credential, branch and role in one round trip instead of three.
     const credential = await this.prisma.branchRoleCredential.findUnique({
+      relationLoadStrategy: 'join',
       where: { pinLookup },
       include: {
         branch: true,

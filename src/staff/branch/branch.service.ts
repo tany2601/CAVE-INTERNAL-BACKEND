@@ -237,20 +237,26 @@ export class BranchOpsService {
 
   /** Everything the tablet dashboards need for "today" in a single call. */
   async getToday(reqUser: any) {
-    const branch = await this.resolveBranch(reqUser);
     const isManager = reqUser.role === 'MANAGER';
     const key = dayKey();
     const since = dayStart(key);
+    const branchId = reqUser?.branchId;
+    if (!branchId) await this.resolveBranch(reqUser); // throws the "no branch context" error
 
-    const [active, closed, expenses, payouts, dayRow, stats] = await Promise.all([
+    // Everything runs in one parallel batch (including the branch lookup): each database round trip
+    // is ~100 ms away, so a chain of awaits here is what made sign-in feel slow.
+    const [branch, active, closed, expenses, payouts, dayRow, stats] = await Promise.all([
+      this.resolveBranch(reqUser),
       this.prisma.session.findMany({
-        where: { branchId: branch.id, status: SessionStatus.ACTIVE },
+        relationLoadStrategy: 'join',
+        where: { branchId, status: SessionStatus.ACTIVE },
         include: SESSION_INCLUDE,
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.session.findMany({
+        relationLoadStrategy: 'join',
         where: {
-          branchId: branch.id,
+          branchId,
           status: SessionStatus.COMPLETED,
           closedAt: { gte: since },
         },
@@ -259,21 +265,21 @@ export class BranchOpsService {
       }),
       isManager
         ? this.prisma.branchTransaction.findMany({
-            where: { branchId: branch.id, createdAt: { gte: since } },
+            where: { branchId: branchId, createdAt: { gte: since } },
             include: { createdBy: { select: { id: true, name: true } } },
             orderBy: { createdAt: 'asc' },
           })
         : Promise.resolve([]),
       isManager
         ? this.prisma.staffPayout.findMany({
-            where: { branchId: branch.id, forDate: dayDate(key) },
+            where: { branchId: branchId, forDate: dayDate(key) },
             orderBy: { createdAt: 'asc' },
           })
         : Promise.resolve([]),
       this.prisma.dailyBalance.findUnique({
-        where: { branchId_date: { branchId: branch.id, date: dayDate(key) } },
+        where: { branchId_date: { branchId: branchId, date: dayDate(key) } },
       }),
-      this.buildStylistStats(branch.id, since),
+      this.buildStylistStats(branchId, since),
     ]);
 
     const paidBy = new Map<string, number>();
