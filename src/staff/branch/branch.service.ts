@@ -24,6 +24,7 @@ import {
   dayDate,
   dayKey,
   dayStart,
+  minutesBetween,
   periodRange,
   ReportPeriod,
 } from '../../common/time.util.js';
@@ -39,6 +40,9 @@ const SESSION_INCLUDE = {
   services: true,
   products: true,
 } as const;
+
+/** The later of two instants; work time only counts from the start of the period being reported. */
+const later = (a: Date | null, b: Date): Date | null => (a && a > b ? a : a ? b : null);
 
 @Injectable()
 export class BranchOpsService {
@@ -107,7 +111,7 @@ export class BranchOpsService {
     // One batch of independent queries instead of a chain of awaits.
     const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const monthStart = periodRange('THIS_MONTH').start as Date;
-    const [staff, completed, history, mtdRows, activeRows] = await Promise.all([
+    const [staff, completed, history, mtdRows, activeRows, tipPayouts] = await Promise.all([
       this.prisma.user.findMany({
         where: {
           branchId,
@@ -128,6 +132,9 @@ export class BranchOpsService {
           stylistId: true,
           totalAmount: true,
           tipAmount: true,
+          paymentMode: true,
+          startedAt: true,
+          closedAt: true,
           services: { select: { serviceName: true } },
         },
       }),
@@ -154,13 +161,29 @@ export class BranchOpsService {
         },
         _sum: { totalAmount: true, tipAmount: true },
       }),
-      this.prisma.session.groupBy({
-        by: ['stylistId'],
+      // Sessions in the chair right now: counted, and their elapsed time adds to work time.
+      this.prisma.session.findMany({
         where: { branchId, status: SessionStatus.ACTIVE, stylistId: { not: null } },
-        _count: { _all: true },
+        select: { stylistId: true, startedAt: true, createdAt: true },
+      }),
+      // Tips already handed over to staff in this period.
+      this.prisma.staffPayout.groupBy({
+        by: ['userId'],
+        where: { branchId, kind: PayoutKind.TIP_WITHDRAWAL, createdAt: { gte: start } },
+        _sum: { amount: true },
       }),
     ]);
-    const activeCounts = new Map(activeRows.map((r) => [r.stylistId as string, r._count._all]));
+    const activeCounts = new Map<string, number>();
+    const activeMinutes = new Map<string, number>();
+    for (const r of activeRows) {
+      const sid = r.stylistId as string;
+      activeCounts.set(sid, (activeCounts.get(sid) ?? 0) + 1);
+      activeMinutes.set(
+        sid,
+        (activeMinutes.get(sid) ?? 0) + minutesBetween(later(r.startedAt ?? r.createdAt, start), new Date()),
+      );
+    }
+    const tipsPaid = new Map(tipPayouts.map((r) => [r.userId, Number(r._sum.amount ?? 0)]));
 
     const specialtyCounts = new Map<string, Map<string, number>>();
     for (const h of history) {
@@ -183,6 +206,22 @@ export class BranchOpsService {
         (a, s) => a + Number(s.totalAmount) - Number(s.tipAmount),
         0,
       );
+      // Cash vs GPay split. A bill has one payment mode, and its tip follows it.
+      const split = { cashRevenue: 0, gpayRevenue: 0, cashTips: 0, gpayTips: 0 };
+      let doneMinutes = 0;
+      for (const s of mine) {
+        const tip = Number(s.tipAmount);
+        const rev = Number(s.totalAmount) - tip;
+        if (s.paymentMode === 'GPAY') {
+          split.gpayRevenue += rev;
+          split.gpayTips += tip;
+        } else {
+          split.cashRevenue += rev;
+          split.cashTips += tip;
+        }
+        doneMinutes += minutesBetween(later(s.startedAt, start), s.closedAt);
+      }
+      const paid = tipsPaid.get(u.id) ?? 0;
       const serviceCounts = new Map<string, number>();
       for (const s of mine)
         for (const svc of s.services)
@@ -203,6 +242,14 @@ export class BranchOpsService {
         revenueToday: round2(revenue),
         commission: round2(computeCommission(u, revenue, mtd.get(u.id) ?? 0)),
         tips: round2(tips),
+        cashRevenue: round2(split.cashRevenue),
+        gpayRevenue: round2(split.gpayRevenue),
+        cashTips: round2(split.cashTips),
+        gpayTips: round2(split.gpayTips),
+        tipsWithdrawn: round2(paid),
+        tipsAvailable: round2(Math.max(0, tips - paid)),
+        workMinutes: doneMinutes + (activeMinutes.get(u.id) ?? 0),
+        avgSessionMinutes: mine.length ? Math.round(doneMinutes / mine.length) : 0,
         // A target of 0 (or none set) falls back to the default so progress bars stay valid.
         dailyTarget: Number(u.dailyRevenueTarget ?? 0) || DEFAULT_DAILY_TARGET,
         services: [...serviceCounts.entries()]
@@ -530,8 +577,22 @@ export class BranchOpsService {
         amount = stats.find((s) => s.id === staff.id)?.commission ?? 0;
       }
     }
+    if (kind === PayoutKind.TIP_WITHDRAWAL) {
+      const stats = await this.buildStylistStats(branch.id, dayStart(key));
+      const available = stats.find((st) => st.id === staff.id)?.tipsAvailable ?? 0;
+      if (amount === undefined) amount = available;
+      if (amount > available + 0.001) {
+        throw new BadRequestException(
+          `Only ₹${available} of tips is available to withdraw for this stylist.`,
+        );
+      }
+    }
     if (!amount || amount <= 0) {
-      throw new BadRequestException('There is nothing to pay out for this stylist.');
+      throw new BadRequestException(
+        kind === PayoutKind.TIP_WITHDRAWAL
+          ? 'There are no tips to withdraw for this stylist.'
+          : 'There is nothing to pay out for this stylist.',
+      );
     }
 
     const payout = await this.prisma.staffPayout.create({

@@ -9,6 +9,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -17,6 +18,7 @@ import { CreateProductDto, UpdateProductDto } from './admin-products.dto.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { RolesGuard } from '../../common/guards/roles.guard.js';
 import { Roles } from '../../common/decorators/roles.decorator.js';
+import type { ReportPeriod } from '../../common/time.util.js';
 
 @ApiTags('Admin Products')
 @ApiBearerAuth()
@@ -27,9 +29,10 @@ export class AdminProductsController {
   constructor(private readonly service: AdminProductsService) {}
 
   @Get()
-  @ApiOperation({ summary: 'All products (active and inactive)' })
-  list() {
-    return this.service.list();
+  @ApiOperation({ summary: 'All products (active and inactive) with sales for a period' })
+  list(@Query('period') period?: string) {
+    const allowed = ['TODAY', 'THIS_WEEK', 'THIS_MONTH', 'ALL_TIME'];
+    return this.service.list(allowed.includes(period ?? '') ? (period as ReportPeriod) : 'ALL_TIME');
   }
 
   @Post()

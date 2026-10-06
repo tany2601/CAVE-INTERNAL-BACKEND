@@ -672,4 +672,40 @@ export class AdminBranchesService {
       role: s.role.name,
     }));
   }
+
+  /**
+   * Permanently removes a branch that has never traded. Branches with sessions, money records
+   * or staff keep their history, so those can only be deactivated.
+   */
+  async deleteBranch(id: string) {
+    const branch = await this.prisma.branch.findUnique({
+      where: { id },
+      select: { id: true, name: true },
+    });
+    if (!branch) throw new NotFoundException('Branch not found.');
+
+    const [sessions, transactions, payouts, staff] = await Promise.all([
+      this.prisma.session.count({ where: { branchId: id } }),
+      this.prisma.branchTransaction.count({ where: { branchId: id } }),
+      this.prisma.staffPayout.count({ where: { branchId: id } }),
+      this.prisma.user.count({ where: { branchId: id } }),
+    ]);
+    if (sessions + transactions + payouts > 0) {
+      throw new ConflictException(
+        `${branch.name} has sessions or payments on record, so it can't be deleted. Deactivate it instead to keep the history.`,
+      );
+    }
+    if (staff > 0) {
+      throw new ConflictException(
+        `${branch.name} still has ${staff} staff member${staff === 1 ? '' : 's'}. Delete or move them first, or deactivate the branch.`,
+      );
+    }
+
+    // Menu pricing blocks the delete; PINs, checklist ticks and opening balances go with the branch.
+    await this.prisma.$transaction([
+      this.prisma.branchServicePricing.deleteMany({ where: { branchId: id } }),
+      this.prisma.branch.delete({ where: { id } }),
+    ]);
+    return { message: 'Branch deleted successfully' };
+  }
 }

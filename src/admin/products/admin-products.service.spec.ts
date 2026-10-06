@@ -27,6 +27,7 @@ describe('AdminProductsService', () => {
         update: vi.fn(),
         delete: vi.fn(),
       },
+      sessionProduct: { groupBy: vi.fn().mockResolvedValue([]) },
     };
     service = new AdminProductsService(prisma);
   });
@@ -35,6 +36,19 @@ describe('AdminProductsService', () => {
     prisma.product.findMany.mockResolvedValue([row()]);
     const res = await service.list();
     expect(res.data[0]).toMatchObject({ name: 'Matte Clay', price: 599, description: '', category: '' });
+  });
+
+  it('adds sold counts and revenue per product and in the summary', async () => {
+    prisma.product.findMany.mockResolvedValue([row(), row({ id: 'p2', name: 'Beard Oil' })]);
+    prisma.sessionProduct.groupBy.mockResolvedValue([
+      { productName: 'Matte Clay', _count: { _all: 3 }, _sum: { price: '1797.00' } },
+      { productName: 'Retired Wax', _count: { _all: 2 }, _sum: { price: '300.00' } },
+    ]);
+    const res = await service.list('THIS_MONTH');
+    expect(res.data[0]).toMatchObject({ sold: 3, revenue: 1797 });
+    expect(res.data[1]).toMatchObject({ sold: 0, revenue: 0 });
+    // Deleted/renamed products still count towards the totals.
+    expect(res.summary).toEqual({ period: 'THIS_MONTH', totalSold: 5, totalRevenue: 2097 });
   });
 
   it('refuses duplicate product names on create and on rename', async () => {

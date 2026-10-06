@@ -1,5 +1,6 @@
 import {
   Controller,
+  Delete,
   Post,
   Get,
   Patch,
@@ -209,5 +210,18 @@ export class AdminStaffController {
     @Body() dto: UpdateStaffStatusDto,
   ) {
     return this.adminStaffService.updateStaffStatus(id, dto);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Permanently delete a staff member who has no history' })
+  @ApiParam({ name: 'id', description: 'UUID of the staff member' })
+  @ApiResponse({ status: 404, description: 'Staff member not found' })
+  @ApiResponse({ status: 409, description: 'Staff member has history; deactivate instead' })
+  async deleteStaff(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.adminStaffService.deleteStaff(id);
   }
 }

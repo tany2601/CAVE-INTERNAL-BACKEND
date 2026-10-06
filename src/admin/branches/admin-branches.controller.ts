@@ -208,6 +208,19 @@ export class AdminBranchesController {
     return this.adminBranchesService.updateBranchStatus(id, dto);
   }
 
+  @Delete(':id')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Permanently delete a branch that has never traded' })
+  @ApiParam({ name: 'id', description: 'UUID of the branch' })
+  @ApiResponse({ status: 404, description: 'Branch not found' })
+  @ApiResponse({ status: 409, description: 'Branch has history or staff; deactivate instead' })
+  async deleteBranch(@Param('id', new ParseUUIDPipe()) id: string) {
+    return this.adminBranchesService.deleteBranch(id);
+  }
+
   @Put(':branchId/role-pins/:roleName')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, RolesGuard)

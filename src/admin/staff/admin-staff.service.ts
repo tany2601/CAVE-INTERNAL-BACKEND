@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { CommissionModel } from '@prisma/client';
@@ -724,5 +725,37 @@ export class AdminStaffService {
       message: 'Staff member status updated successfully',
       staff: this.formatStaffOutput(updatedStaff),
     };
+  }
+
+  /**
+   * Permanently removes a staff member who has no history. Anyone who has served customers,
+   * been paid or recorded money keeps their records, so those can only be deactivated.
+   */
+  async deleteStaff(id: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true, name: true, role: { select: { name: true } } },
+    });
+    if (!user) throw new NotFoundException('Staff member not found.');
+    if (user.role?.name === 'ADMIN') {
+      throw new BadRequestException('The admin account cannot be deleted.');
+    }
+
+    const [sessions, transactions, payouts, salaries] = await Promise.all([
+      this.prisma.session.count({ where: { stylistId: id } }),
+      this.prisma.branchTransaction.count({
+        where: { OR: [{ employeeId: id }, { createdById: id }] },
+      }),
+      this.prisma.staffPayout.count({ where: { userId: id } }),
+      this.prisma.salaryPayment.count({ where: { userId: id } }),
+    ]);
+    if (sessions + transactions + payouts + salaries > 0) {
+      throw new ConflictException(
+        `${user.name} has sessions or payments on record, so they can't be deleted. Deactivate them instead to keep the history.`,
+      );
+    }
+
+    await this.prisma.user.delete({ where: { id } });
+    return { message: 'Staff member deleted successfully' };
   }
 }
