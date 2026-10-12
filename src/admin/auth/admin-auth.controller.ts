@@ -6,8 +6,10 @@ import {
   Body,
   HttpCode,
   HttpStatus,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import {
   ApiTags,
   ApiOperation,
@@ -49,8 +51,8 @@ export class AdminAuthController {
     status: 401,
     description: 'Invalid PIN or admin account not found',
   })
-  async login(@Body() dto: AdminLoginDto) {
-    return this.adminAuthService.login(dto);
+  async login(@Body() dto: AdminLoginDto, @Req() req: Request) {
+    return this.adminAuthService.login(dto, req.ip || req.socket.remoteAddress || 'global');
   }
 
   @Post('pin/setup')

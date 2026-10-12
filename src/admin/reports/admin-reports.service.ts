@@ -161,7 +161,8 @@ export class AdminReportsService {
       totals: {
         revenue: total.revenue,
         customers: total.customers,
-        avgTicket: total.customers ? Math.round(total.revenue / total.customers) : 0,
+        // Product-only sales are not customers, so they stay out of the average ticket.
+        avgTicket: total.customers ? round2((total.revenue - total.productOnlyRevenue) / total.customers) : 0,
         activeNow: [...activeByBranch.values()].reduce((a, b) => a + b, 0),
       },
       payroll: {
@@ -181,7 +182,7 @@ export class AdminReportsService {
           name: b.name,
           location: this.location(b),
           revenue: round2(mine.reduce((a, s) => a + n(s.totalAmount) - n(s.tipAmount), 0)),
-          customers: mine.length,
+          customers: mine.filter((s) => s.services.length > 0).length,
           active: activeByBranch.get(b.id) ?? 0,
           target: b.monthlyTarget,
           monthRevenue: round2(monthRevenue),
@@ -235,40 +236,62 @@ export class AdminReportsService {
 
   async getSessions(query: SessionsReportQueryDto) {
     const { start, end } = this.rangeOf(query);
-    const sessions = await this.loadSessions(start, end, query.branchId);
-    const branches = await this.prisma.branch.findMany({ select: { id: true, name: true } });
-    const branchName = new Map(branches.map((b) => [b.id, b.name]));
-    const staff = await this.prisma.user.findMany({ select: { id: true, name: true } });
-    const staffName = new Map(staff.map((u) => [u.id, u.name]));
+    const where = {
+      status: SessionStatus.COMPLETED,
+      ...(query.branchId ? { branchId: query.branchId } : {}),
+      ...this.rangeWhere('closedAt', start, end),
+    };
+    const page = query.page;
 
-    const byBranch = new Map<string, number>();
+    // Totals come from the database; only the requested page of bills is loaded.
+    const [byMode, perBranch, total, rows, branches] = await Promise.all([
+      this.prisma.session.groupBy({ by: ['paymentMode'], where, _sum: { totalAmount: true }, _count: { _all: true } }),
+      this.prisma.session.groupBy({
+        by: ['branchId'],
+        where: { ...where, services: { some: {} } }, // customers served, not product-only sales
+        _count: { _all: true },
+      }),
+      this.prisma.session.count({ where }),
+      this.prisma.session.findMany({
+        where,
+        select: SESSION_FIN_SELECT,
+        orderBy: { closedAt: 'desc' },
+        skip: (page - 1) * query.limit,
+        take: query.limit,
+      }) as unknown as Promise<FinSession[]>,
+      this.prisma.branch.findMany({ select: { id: true, name: true } }),
+    ]);
+    const stylistIds = [...new Set(rows.map((s) => s.stylistId).filter((x): x is string => !!x))];
+    const staff = stylistIds.length
+      ? await this.prisma.user.findMany({ where: { id: { in: stylistIds } }, select: { id: true, name: true } })
+      : [];
+    const branchName = new Map(branches.map((b) => [b.id, b.name]));
+    const staffName = new Map(staff.map((u) => [u.id, u.name]));
+    const customersByBranch = new Map(perBranch.map((r) => [r.branchId, r._count._all]));
+
     let cash = 0;
     let gpay = 0;
-    let amount = 0;
-    for (const s of sessions) {
-      byBranch.set(s.branchId, (byBranch.get(s.branchId) ?? 0) + 1);
-      amount += n(s.totalAmount);
-      if (s.paymentMode === PaymentMode.GPAY) gpay += n(s.totalAmount);
-      else cash += n(s.totalAmount);
+    for (const g of byMode) {
+      const amount = Number(g._sum.totalAmount ?? 0);
+      if (g.paymentMode === PaymentMode.GPAY) gpay += amount;
+      else cash += amount;
     }
 
-    const page = query.page;
-    const slice = sessions.slice((page - 1) * query.limit, page * query.limit);
     return {
       period: query.period,
-      total: sessions.length,
+      total,
       page,
       limit: query.limit,
       totals: {
-        count: sessions.length,
-        amount: round2(amount),
+        count: total,
+        amount: round2(cash + gpay),
         cash: round2(cash),
         gpay: round2(gpay),
       },
       byBranch: [...branchName.entries()]
         .filter(([id]) => !query.branchId || id === query.branchId)
-        .map(([id, name]) => ({ branchId: id, name, customers: byBranch.get(id) ?? 0 })),
-      data: slice.map((s) => ({
+        .map(([id, name]) => ({ branchId: id, name, customers: customersByBranch.get(id) ?? 0 })),
+      data: rows.map((s) => ({
         id: s.id,
         closedAt: s.closedAt,
         customer: s.customerName,
@@ -303,6 +326,7 @@ export class AdminReportsService {
         branchId: true,
         closedAt: true,
         totalAmount: true,
+        tipAmount: true,
         services: { select: { serviceName: true } },
       },
       orderBy: { closedAt: 'asc' },
@@ -343,7 +367,8 @@ export class AdminReportsService {
       const p = profiles.get(s.customerId as string);
       if (!p) continue;
       p.visits += 1;
-      p.totalSpent += n(s.totalAmount);
+      // Lifetime value is what the customer spent on the salon; tips go to staff and are left out.
+      p.totalSpent += n(s.totalAmount) - n(s.tipAmount);
       p.firstVisit = p.firstVisit ?? s.closedAt;
       p.lastVisit = s.closedAt;
       p.lastBranchId = s.branchId;
@@ -358,7 +383,7 @@ export class AdminReportsService {
       totalProfiles: profiles.length,
       returning: profiles.filter((p) => p.visits > 1).length,
       avgLifetimeValue: profiles.length
-        ? Math.round(profiles.reduce((a, p) => a + p.totalSpent, 0) / profiles.length)
+        ? round2(profiles.reduce((a, p) => a + p.totalSpent, 0) / profiles.length)
         : 0,
       spendBands: [
         { label: '₹10k+', count: profiles.filter((p) => p.totalSpent >= 10000).length },
@@ -658,6 +683,11 @@ export class AdminReportsService {
       _count: { _all: true },
     });
 
+    // Staff payouts (commission, tip withdrawals) in the same window leave the till too.
+    const payouts = await this.loadPayouts(since, until, query.branchId);
+    const commissionPaid = payouts.filter((p) => p.kind === 'COMMISSION').reduce((a, p) => a + n(p.amount), 0);
+    const tipWithdrawals = payouts.filter((p) => p.kind === 'TIP_WITHDRAWAL').reduce((a, p) => a + n(p.amount), 0);
+
     const branches = await this.prisma.branch.findMany({
       where: { id: { in: [...new Set(grouped.map((g) => g.branchId))] } },
       select: { id: true, name: true },
@@ -700,6 +730,8 @@ export class AdminReportsService {
       revenue: round2(cash + gpay - tips), // service + product revenue
       cashCollected: round2(cash),
       gpayCollected: round2(gpay),
+      commissionPaid: round2(commissionPaid),
+      tipWithdrawals: round2(tipWithdrawals),
       byBranch: [...byBranch.values()].map((b) => ({
         ...b,
         collected: round2(b.collected),

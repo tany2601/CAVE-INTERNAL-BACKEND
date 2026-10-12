@@ -195,6 +195,7 @@ model BranchTransaction {
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
+  @@index([branchId, createdAt])
   @@index([branchId])
   @@index([type])
   @@index([createdAt])
@@ -237,6 +238,10 @@ model Session {
   startedAt        DateTime?
   closedAt         DateTime?
   isLoyaltyCounted Boolean       @default(false)
+  /**
+   * The customer's free-haircut visit (every 6th); decided when the bill is closed and kept for later edits.
+   */
+  isFreeVisit      Boolean       @default(false)
   isEdited         Boolean       @default(false)
   editedAt         DateTime?
   createdAt        DateTime      @default(now())
@@ -250,6 +255,9 @@ model Session {
   @@index([customerId])
   @@index([status])
   @@index([createdAt])
+  // Reports and dashboards filter completed bills by branch / stylist and close time.
+  @@index([branchId, status, closedAt])
+  @@index([stylistId, status, closedAt])
 }
 
 model SessionService {
@@ -391,4 +399,107 @@ model Product {
   updatedAt   DateTime @updatedAt
 
   @@index([isActive])
+}
+
+// ── WhatsApp (bills to customers, reports to admins) ───────────────────
+
+enum WhatsappKind {
+  BILL
+  REPORT
+  TEST
+  OFFER
+}
+
+enum WhatsappStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+/**
+ * One outgoing WhatsApp template message. `dedupeKey` makes every send happen at most once.
+ */
+model WhatsappMessage {
+  id                String         @id @default(uuid())
+  dedupeKey         String         @unique
+  kind              WhatsappKind
+  status            WhatsappStatus @default(PENDING)
+  to                String
+  template          String
+  params            Json
+  sessionId         String?
+  /**
+   * Set for offers, so a broadcast's delivery can be counted.
+   */
+  offerId           String?
+  /**
+   * Optional image for the template header: { id } of an uploaded media file, or { link }.
+   */
+  header            Json?
+  attempts          Int            @default(0)
+  nextAttemptAt     DateTime       @default(now())
+  lastError         String?
+  providerMessageId String?
+  /**
+   * Held while one process is sending this row, so two server instances never send it twice.
+   */
+  lockedUntil       DateTime?
+  /**
+   * What WhatsApp reported after accepting it: "delivered", "read" or "failed" (webhook).
+   */
+  deliveryStatus    String?
+  deliveredAt       DateTime?
+  readAt            DateTime?
+  /**
+   * WhatsApp's error code for the last failure, when it gave one.
+   */
+  errorCode         Int?
+  createdAt         DateTime       @default(now())
+  sentAt            DateTime?
+
+  @@index([providerMessageId])
+  @@index([status, nextAttemptAt])
+  @@index([sessionId])
+  @@index([offerId])
+}
+
+/**
+ * An offer broadcast the admin sent to customers on WhatsApp.
+ */
+model WhatsappOffer {
+  id          String   @id @default(uuid())
+  message     String
+  imageUrl    String?
+  /**
+   * Branches whose customers were targeted; empty means every branch.
+   */
+  branchIds   String[]
+  audience    Int      @default(0)
+  /**
+   * Fingerprint of message + picture + branches, so the same offer can't be sent twice in a row.
+   */
+  contentHash String?
+  createdAt   DateTime @default(now())
+
+  @@index([contentHash, createdAt])
+}
+
+/**
+ * Numbers that must not be messaged: replied STOP (offers) or WhatsApp said they can't receive messages.
+ */
+model WhatsappSuppression {
+  phone     String   @id
+  /// STOP (no offers) or UNDELIVERABLE (not on WhatsApp; retried after 30 days)
+  reason    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+/**
+ * Small key/value store for admin-editable settings (e.g. who receives WhatsApp reports).
+ */
+model AppSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
 }

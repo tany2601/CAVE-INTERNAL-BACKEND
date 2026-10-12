@@ -5,9 +5,10 @@ import { SessionsController } from './sessions.controller.js';
 import { SessionsService } from './sessions.service.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { RolesGuard } from '../../common/guards/roles.guard.js';
+import { WhatsappModule } from '../../whatsapp/whatsapp.module.js';
 
 @Module({
-  imports: [PrismaModule, ConfigModule],
+  imports: [PrismaModule, ConfigModule, WhatsappModule],
   controllers: [SessionsController],
   providers: [SessionsService, JwtAuthGuard, RolesGuard],
   exports: [SessionsService],

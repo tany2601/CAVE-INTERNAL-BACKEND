@@ -61,40 +61,48 @@ export class JwtAuthGuard implements CanActivate {
 
     const [headerB64, payloadB64, signatureB64] = tokenParts;
 
+    // Fail closed: with no signing secret configured nothing can be trusted.
+    const jwtSecret =
+      this.configService.get<string>('JWT_SECRET') ||
+      this.configService.get<string>('SUPABASE_SECRET_KEY');
+    if (!jwtSecret) {
+      throw new UnauthorizedException('Authentication is not configured.');
+    }
+
     let header: any;
     let payload: JwtPayload;
-
     try {
-      header = JSON.parse(
-        Buffer.from(headerB64, 'base64url').toString('utf-8'),
-      );
-      payload = JSON.parse(
-        Buffer.from(payloadB64, 'base64url').toString('utf-8'),
-      );
+      header = JSON.parse(Buffer.from(headerB64, 'base64url').toString('utf-8'));
+      payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf-8'));
     } catch {
       throw new UnauthorizedException('Invalid JWT payload');
     }
 
-    if (payload.exp && typeof payload.exp === 'number') {
-      const nowInSeconds = Math.floor(Date.now() / 1000);
-      if (nowInSeconds >= payload.exp) {
-        throw new UnauthorizedException('Token has expired');
-      }
+    // Only HS256 is ever issued. Accepting the token's own `alg` (e.g. "none") would let anyone forge one.
+    if (!header || header.alg !== 'HS256') {
+      throw new UnauthorizedException('Invalid JWT algorithm');
     }
 
-    const jwtSecret =
-      this.configService.get<string>('JWT_SECRET') ||
-      this.configService.get<string>('SUPABASE_SECRET_KEY');
+    const expected = crypto
+      .createHmac('sha256', jwtSecret)
+      .update(`${headerB64}.${payloadB64}`)
+      .digest();
+    let provided: Buffer;
+    try {
+      provided = Buffer.from(signatureB64, 'base64url');
+    } catch {
+      throw new UnauthorizedException('Invalid JWT signature');
+    }
+    if (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) {
+      throw new UnauthorizedException('Invalid JWT signature');
+    }
 
-    if (jwtSecret && header.alg === 'HS256') {
-      const expectedSignature = crypto
-        .createHmac('sha256', jwtSecret)
-        .update(`${headerB64}.${payloadB64}`)
-        .digest('base64url');
-
-      if (signatureB64 !== expectedSignature) {
-        throw new UnauthorizedException('Invalid JWT signature');
-      }
+    // Every token we issue expires; one without a valid expiry is rejected.
+    if (!payload || typeof payload.exp !== 'number') {
+      throw new UnauthorizedException('Token has no expiry');
+    }
+    if (Math.floor(Date.now() / 1000) >= payload.exp) {
+      throw new UnauthorizedException('Token has expired');
     }
 
     return payload;

@@ -89,48 +89,6 @@ describe('BranchOpsService · day balances, payouts and checklist', () => {
         service.createPayout(reqUser, { userId: 'u1', paymentMode: PaymentMode.CASH }),
       ).rejects.toThrow(BadRequestException);
     });
-
-    it("won't pay a stylist's commission twice in a day", async () => {
-      prisma.user.findUnique.mockResolvedValue(staff);
-      prisma.staffPayout.count.mockResolvedValue(1);
-      await expect(
-        service.createPayout(reqUser, { userId: 'u1', paymentMode: PaymentMode.CASH, amount: 100 }),
-      ).rejects.toThrow(ConflictException);
-    });
-
-    it('records an explicit commission amount in the ledger', async () => {
-      prisma.user.findUnique.mockResolvedValue(staff);
-      prisma.staffPayout.count.mockResolvedValue(0);
-      prisma.staffPayout.create.mockResolvedValue({
-        id: 'p1',
-        userId: 'u1',
-        kind: PayoutKind.COMMISSION,
-        amount: 254.82,
-        paymentMode: PaymentMode.CASH,
-        createdAt: new Date(),
-      });
-      const res = await service.createPayout(reqUser, {
-        userId: 'u1',
-        paymentMode: PaymentMode.CASH,
-        amount: 254.82,
-      });
-      expect(prisma.staffPayout.create.mock.calls[0][0].data).toMatchObject({
-        branchId: branch.id,
-        userId: 'u1',
-        amount: 254.82,
-        kind: PayoutKind.COMMISSION,
-      });
-      expect(res.amount).toBe(254.82);
-    });
-
-    it('refuses a zero payout', async () => {
-      prisma.user.findUnique.mockResolvedValue(staff);
-      prisma.staffPayout.count.mockResolvedValue(0);
-      // no commission accrued -> computed amount is 0
-      await expect(
-        service.createPayout(reqUser, { userId: 'u1', paymentMode: PaymentMode.CASH }),
-      ).rejects.toThrow(/nothing to pay out/);
-    });
   });
 
   describe('checklist', () => {

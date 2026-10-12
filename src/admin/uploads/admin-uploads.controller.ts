@@ -33,8 +33,8 @@ export class AdminUploadsController {
     @UploadedFile() file: { buffer: Buffer; mimetype: string; size: number } | undefined,
     @Query('folder') folder?: string,
   ) {
-    if (folder !== 'staff' && folder !== 'branches' && folder !== 'products') {
-      throw new BadRequestException('folder must be "staff", "branches" or "products".');
+    if (folder !== 'staff' && folder !== 'branches' && folder !== 'products' && folder !== 'offers') {
+      throw new BadRequestException('folder must be "staff", "branches", "products" or "offers".');
     }
     return this.uploads.uploadImage(file, folder);
   }

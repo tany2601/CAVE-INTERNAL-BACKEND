@@ -6,6 +6,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { DEFAULT_MENU } from '../../common/default-menu.js';
 import { AdminBranchesService } from './admin-branches.service.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { PinService } from '../../common/security/pin.service.js';
@@ -80,7 +81,10 @@ describe('AdminBranchesService', () => {
         create: vi.fn(),
         update: vi.fn(),
       },
-      service: { findMany: vi.fn().mockResolvedValue([]) },
+      service: {
+        findMany: vi.fn().mockResolvedValue([]),
+        create: vi.fn().mockImplementation(async ({ data }: any) => ({ id: `new-${data.name}`, name: data.name, isActive: true })),
+      },
       branchServicePricing: { findMany: vi.fn().mockResolvedValue([]), createMany: vi.fn() },
       $transaction: vi.fn((fn: any) => fn(prismaService)),
       role: {
@@ -232,33 +236,36 @@ describe('AdminBranchesService', () => {
   });
 
   describe('menu for new branches', () => {
-    it('gives a new branch every active service, priced like the other branches (0 if unpriced)', async () => {
+    it('gives a new branch the standard 20-service menu at the standard prices', async () => {
       prismaService.branch.findUnique.mockResolvedValue(null);
       prismaService.branch.create.mockResolvedValue(mockBranch);
-      prismaService.service.findMany.mockResolvedValue([{ id: 's-cut' }, { id: 's-beard' }, { id: 's-new' }]);
-      prismaService.branchServicePricing.findMany.mockResolvedValue([
-        { serviceId: 's-cut', price: 350 }, // most recently updated first
-        { serviceId: 's-cut', price: 300 },
-        { serviceId: 's-beard', price: 150 },
+      // "Haircut + Hair Wash & Style" already exists in the catalogue; everything else is new.
+      prismaService.service.findMany.mockResolvedValue([
+        { id: 's-cut', name: 'Haircut + Hair Wash & Style', isActive: true },
       ]);
 
       await service.createBranch({ name: 'New', code: 'NEW' });
 
-      expect(prismaService.branchServicePricing.createMany).toHaveBeenCalledWith({
-        data: [
-          { branchId: mockBranch.id, serviceId: 's-cut', price: 350 },
-          { branchId: mockBranch.id, serviceId: 's-beard', price: 150 },
-          { branchId: mockBranch.id, serviceId: 's-new', price: 0 },
-        ],
-      });
+      const { data } = prismaService.branchServicePricing.createMany.mock.calls[0][0];
+      expect(data).toHaveLength(DEFAULT_MENU.length);
+      expect(data[0]).toEqual({ branchId: mockBranch.id, serviceId: 's-cut', price: 150 });
+      // Only the 19 missing services are created in the catalogue.
+      expect(prismaService.service.create).toHaveBeenCalledTimes(DEFAULT_MENU.length - 1);
+      const price = (name: string) =>
+        data.find((d: any) => d.serviceId === `new-${name}`)?.price;
+      expect(price('Hydra Facial')).toBe(3000);
+      expect(price('Perming')).toBe(3999);
+      expect(price('The Basic (Haircut + Hair Wash & Style + Beard Trim + Head Massage)')).toBe(349);
     });
 
-    it('skips the menu when there are no services yet', async () => {
+    it('leaves out a default service an admin has switched off', async () => {
       prismaService.branch.findUnique.mockResolvedValue(null);
       prismaService.branch.create.mockResolvedValue(mockBranch);
-      prismaService.service.findMany.mockResolvedValue([]);
+      prismaService.service.findMany.mockResolvedValue([{ id: 's-spa', name: 'Beard Spa', isActive: false }]);
       await service.createBranch({ name: 'New', code: 'NEW' });
-      expect(prismaService.branchServicePricing.createMany).not.toHaveBeenCalled();
+      const { data } = prismaService.branchServicePricing.createMany.mock.calls[0][0];
+      expect(data).toHaveLength(DEFAULT_MENU.length - 1);
+      expect(data.some((d: any) => d.serviceId === 's-spa')).toBe(false);
     });
   });
 

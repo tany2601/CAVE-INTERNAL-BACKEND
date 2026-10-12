@@ -7,6 +7,7 @@ import { AdminModule } from './admin/admin.module.js';
 import { BranchAuthModule } from './auth/branch/branch-auth.module.js';
 import { SessionsModule } from './staff/sessions/sessions.module.js';
 import { BranchOpsModule } from './staff/branch/branch.module.js';
+import { WhatsappModule } from './whatsapp/whatsapp.module.js';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { BranchOpsModule } from './staff/branch/branch.module.js';
     BranchAuthModule,
     SessionsModule,
     BranchOpsModule,
+    WhatsappModule,
   ],
 })
 export class AppModule {}

@@ -44,10 +44,9 @@ export class BranchAuthController {
       'Invalid PIN, inactive branch/role, or unconfigured credential',
   })
   async login(@Body() dto: BranchLoginDto, @Req() req: Request) {
-    const clientIp =
-      (req.headers['x-forwarded-for'] as string) ||
-      req.socket.remoteAddress ||
-      'global';
+    // req.ip honours `trust proxy` (set in main.ts) so it is the real client behind nginx, and a client
+    // cannot choose its own address by sending an X-Forwarded-For header.
+    const clientIp = req.ip || req.socket.remoteAddress || 'global';
     return this.branchAuthService.login(dto, clientIp);
   }
 }

@@ -17,6 +17,7 @@ import { BranchOpsService } from './branch.service.js';
 import { CreateStaffExpenseDto } from './dto/create-staff-expense.dto.js';
 import {
   CloseDayDto,
+  BooksDateQueryDto,
   CreatePayoutDto,
   SetChecklistItemDto,
   SetOpeningBalanceDto,
@@ -78,6 +79,20 @@ export class BranchOpsController {
   @ApiOperation({ summary: 'Stylist performance for today, this week or this month' })
   getStats(@Query() query: StatsQueryDto, @Req() req: any) {
     return this.branchOps.getStats(req.user, query.period);
+  }
+
+  @Get('day')
+  @Roles('MANAGER')
+  @ApiOperation({ summary: "A day's books: opening/closing state and expected balances (defaults to today)" })
+  getDay(@Query() query: BooksDateQueryDto, @Req() req: any) {
+    return this.branchOps.getDay(req.user, query.date);
+  }
+
+  @Get('day/pending')
+  @Roles('MANAGER')
+  @ApiOperation({ summary: 'Recent days whose opening or closing balance was never recorded' })
+  getPendingDays(@Req() req: any) {
+    return this.branchOps.getPendingDays(req.user);
   }
 
   @Put('day/opening')

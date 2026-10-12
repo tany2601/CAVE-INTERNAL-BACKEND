@@ -60,7 +60,11 @@ export const SESSION_FIN_SELECT = {
 const n = (v: unknown) => Number(v ?? 0);
 
 export interface Finance {
+  /** Customers served: completed bills that include at least one service. */
   customers: number;
+  /** Walk-in bills with products only (no services) and the revenue they brought in. */
+  productOnlySales: number;
+  productOnlyRevenue: number;
   /** Everything customers paid except tips (services + products, after discount). */
   revenue: number;
   serviceRevenue: number;
@@ -82,6 +86,8 @@ export interface Finance {
 
 export const emptyFinance = (): Finance => ({
   customers: 0,
+  productOnlySales: 0,
+  productOnlyRevenue: 0,
   revenue: 0,
   serviceRevenue: 0,
   productSalesCash: 0,
@@ -106,19 +112,32 @@ export function aggregateFinance(
 ): Finance {
   const f = emptyFinance();
   for (const s of sessions) {
+    const subtotal = n(s.subtotal);
     const products = s.products.reduce((a, p) => a + n(p.price), 0);
-    f.customers += 1;
-    f.revenue += n(s.totalAmount) - n(s.tipAmount);
-    f.serviceRevenue += n(s.subtotal) - products - n(s.discountAmount);
+    const revenue = n(s.totalAmount) - n(s.tipAmount);
+    // A bill-level discount is shared between services and products in proportion to their value, so
+    // neither line can go negative (e.g. a discounted products-only sale has no "service revenue").
+    const keep = subtotal > 0 ? 1 - Math.min(1, n(s.discountAmount) / subtotal) : 1;
+    if (s.services.length > 0) f.customers += 1;
+    else {
+      f.productOnlySales += 1;
+      f.productOnlyRevenue += revenue;
+    }
+    f.revenue += revenue;
+    f.serviceRevenue += (subtotal - products) * keep;
     f.tips += n(s.tipAmount);
     for (const p of s.products) {
-      if (p.paymentMode === PaymentMode.GPAY) f.productSalesGpay += n(p.price);
-      else f.productSalesCash += n(p.price);
+      if (p.paymentMode === PaymentMode.GPAY) f.productSalesGpay += n(p.price) * keep;
+      else f.productSalesCash += n(p.price) * keep;
     }
     if (s.paymentMode === PaymentMode.GPAY) f.gpayCollected += n(s.totalAmount);
     else f.cashCollected += n(s.totalAmount);
   }
-  f.productSales = f.productSalesCash + f.productSalesGpay;
+  f.productSalesCash = round2(f.productSalesCash);
+  f.productSalesGpay = round2(f.productSalesGpay);
+  f.productSales = round2(f.productSalesCash + f.productSalesGpay);
+  // Service revenue is whatever is left of revenue after products, so the two always add up to the paisa.
+  f.serviceRevenue = Math.max(0, round2(round2(f.revenue) - f.productSales));
   for (const t of transactions) {
     if (t.type === 'EMPLOYEE_ADVANCE') f.advances += n(t.amount);
     else if (t.paymentMode === PaymentMode.GPAY) f.expensesGpay += n(t.amount);

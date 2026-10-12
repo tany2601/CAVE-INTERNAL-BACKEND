@@ -7,6 +7,7 @@ import {
   Body,
   Param,
   Req,
+  Res,
   HttpCode,
   HttpStatus,
   UseGuards,
@@ -19,6 +20,7 @@ import {
   ApiParam,
   ApiBearerAuth,
 } from '@nestjs/swagger';
+import type { Response } from 'express';
 import { SessionsService } from './sessions.service.js';
 import { CreateSessionDto } from './dto/create-session.dto.js';
 import { CloseSessionDto } from './dto/close-session.dto.js';
@@ -102,6 +104,32 @@ export class SessionsController {
   })
   async getActiveSessions(@Req() req: any) {
     return this.sessionsService.getActiveSessions(req.user);
+  }
+
+  @Get(':id/whatsapp')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('STYLIST', 'MANAGER')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Whether this bill's WhatsApp message is pending, sent or failed" })
+  getBillWhatsapp(@Param('id', new ParseUUIDPipe()) id: string, @Req() req: any) {
+    return this.sessionsService.getBillWhatsappStatus(req.user, id);
+  }
+
+  @Get(':id/bill-image')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('STYLIST', 'MANAGER')
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'The closed bill as a branded picture (PNG)' })
+  async getBillImage(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: any,
+    @Res() res: Response,
+  ) {
+    const png = await this.sessionsService.getBillImage(req.user, id);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.type('image/png').send(png);
   }
 
   @Get(':id')

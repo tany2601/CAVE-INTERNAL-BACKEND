@@ -69,13 +69,12 @@ describe('BranchOpsService', () => {
       expect(res).toMatchObject({ found: true, visitCount: 2, rewardReady: false });
     });
 
-    it('flags the reward once the 6th qualifying session is completed', async () => {
-      prisma.customer.findUnique.mockResolvedValue({
-        name: 'Rohan',
-        qualifyingCompletedSessionsCount: 6,
-      });
+    it('flags the free haircut once five visits are done (the 6th is free)', async () => {
+      prisma.customer.findUnique.mockResolvedValue({ name: 'Rohan', qualifyingCompletedSessionsCount: 5 });
       const res = await service.lookupCustomer('9876543210');
-      expect(res).toMatchObject({ visitCount: 6, loyaltyTarget: 6, rewardReady: true });
+      expect(res).toMatchObject({ visitCount: 5, loyaltyTarget: 6, rewardReady: true });
+      prisma.customer.findUnique.mockResolvedValue({ name: 'Rohan', qualifyingCompletedSessionsCount: 6 });
+      expect(await service.lookupCustomer('9876543210')).toMatchObject({ visitCount: 0, rewardReady: false });
     });
   });
 

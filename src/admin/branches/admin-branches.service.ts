@@ -15,6 +15,7 @@ import { ListBranchesQueryDto } from './dto/list-branches-query.dto.js';
 import { UpdateBranchDto } from './dto/update-branch.dto.js';
 import { UpdateBranchStatusDto } from './dto/update-branch-status.dto.js';
 import { SetRolePinDto } from './dto/set-role-pin.dto.js';
+import { DEFAULT_MENU } from '../../common/default-menu.js';
 
 @Injectable()
 export class AdminBranchesService {
@@ -92,29 +93,28 @@ export class AdminBranchesService {
   }
 
   /**
-   * Gives a new branch every active service so its menu isn't empty. Prices start from what
-   * the other branches charge (most recently updated first) and are 0 for services nobody
-   * has priced yet; admins adjust or remove them in Menu pricing.
+   * Gives a new branch the standard menu (see DEFAULT_MENU) at the standard prices. Any of those
+   * services missing from the catalogue are created first; one an admin has switched off stays off.
+   * Admins adjust prices or remove services per branch in Menu pricing.
    */
   private async seedMenu(tx: any, branchId: string) {
-    const services = await tx.service.findMany({ where: { isActive: true } });
-    if (services.length === 0) return;
-    const existing = await tx.branchServicePricing.findMany({
-      where: { isActive: true },
-      orderBy: { updatedAt: 'desc' },
-      select: { serviceId: true, price: true },
+    const existing: { id: string; name: string; isActive: boolean }[] = await tx.service.findMany({
+      where: { name: { in: DEFAULT_MENU.map((m) => m.name) } },
+      select: { id: true, name: true, isActive: true },
     });
-    const priceOf = new Map<string, number>();
-    for (const row of existing) {
-      if (!priceOf.has(row.serviceId)) priceOf.set(row.serviceId, Number(row.price));
+    const byName = new Map(existing.map((s) => [s.name, s]));
+    const rows: { branchId: string; serviceId: string; price: number }[] = [];
+    for (const item of DEFAULT_MENU) {
+      let svc = byName.get(item.name);
+      if (!svc) {
+        svc = await tx.service.create({
+          data: { name: item.name, category: item.category },
+          select: { id: true, name: true, isActive: true },
+        });
+      }
+      if (svc && svc.isActive) rows.push({ branchId, serviceId: svc.id, price: item.price });
     }
-    await tx.branchServicePricing.createMany({
-      data: services.map((s: { id: string }) => ({
-        branchId,
-        serviceId: s.id,
-        price: priceOf.get(s.id) ?? 0,
-      })),
-    });
+    if (rows.length > 0) await tx.branchServicePricing.createMany({ data: rows });
   }
 
   /** A branch manager must be an active MANAGER already assigned to that branch. */

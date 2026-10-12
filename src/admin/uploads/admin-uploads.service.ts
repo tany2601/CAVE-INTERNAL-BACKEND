@@ -36,7 +36,7 @@ export class AdminUploadsService {
   /** Uploads an image to Supabase Storage and returns its public URL. */
   async uploadImage(
     file: { buffer: Buffer; mimetype: string; size: number } | undefined,
-    folder: 'staff' | 'branches' | 'products',
+    folder: 'staff' | 'branches' | 'products' | 'offers',
   ) {
     if (!file) throw new BadRequestException('An image file is required (field "file").');
     const ext = ALLOWED[file.mimetype];

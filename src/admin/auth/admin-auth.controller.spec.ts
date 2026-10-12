@@ -59,9 +59,9 @@ describe('AdminAuthController & Guards', () => {
       adminAuthService.login.mockResolvedValue(mockResult);
 
       const dto = { pin: '123456' };
-      const result = await controller.login(dto);
+      const result = await controller.login(dto, { ip: '203.0.113.7', socket: {} } as any);
 
-      expect(adminAuthService.login).toHaveBeenCalledWith(dto);
+      expect(adminAuthService.login).toHaveBeenCalledWith(dto, '203.0.113.7');
       expect(result).toEqual(mockResult);
     });
   });
@@ -107,7 +107,7 @@ describe('AdminAuthController & Guards', () => {
       );
     });
 
-    it('3. Accepts request with valid JWT token', () => {
+    it('3. Rejects an unsigned "alg: none" token (it used to be accepted)', () => {
       const header = Buffer.from(
         JSON.stringify({ alg: 'none', typ: 'JWT' }),
       ).toString('base64url');
@@ -123,13 +123,8 @@ describe('AdminAuthController & Guards', () => {
         }),
       } as ExecutionContext;
 
-      const canActivate = jwtAuthGuard.canActivate(mockContext);
-      expect(canActivate).toBe(true);
-      expect(requestObj.user).toEqual({
-        sub: 'admin-id-123',
-        role: 'ADMIN',
-        id: 'admin-id-123',
-      });
+      expect(() => jwtAuthGuard.canActivate(mockContext)).toThrow(UnauthorizedException);
+      expect(requestObj.user).toBeUndefined();
     });
   });
 

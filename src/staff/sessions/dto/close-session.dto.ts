@@ -84,6 +84,15 @@ export class CloseSessionProductItemDto {
 
 export class CloseSessionDto {
   @ApiPropertyOptional({
+    description: "Customer's WhatsApp number to send the bill to when none was saved at check-in",
+    example: '9876543210',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  whatsappTo?: string;
+
+  @ApiPropertyOptional({
     type: [CloseSessionServiceItemDto],
     description: 'List of menu services selected from branch pricing',
   })

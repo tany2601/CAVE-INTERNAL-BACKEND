@@ -34,18 +34,26 @@ describe('aggregateFinance', () => {
           tipAmount: 50,
           totalAmount: 410,
           paymentMode: PaymentMode.GPAY,
+          services: [{ serviceName: 'Haircut', price: 300 }],
           products: [{ price: 100, paymentMode: PaymentMode.GPAY }],
         }),
-        session({ subtotal: 150, totalAmount: 150, paymentMode: PaymentMode.CASH }),
+        session({
+          subtotal: 150,
+          totalAmount: 150,
+          paymentMode: PaymentMode.CASH,
+          services: [{ serviceName: 'Beard', price: 150 }],
+        }),
       ],
       [],
       [],
     );
     expect(f.customers).toBe(2);
     expect(f.revenue).toBe(510); // 360 + 150, tips excluded
-    expect(f.serviceRevenue).toBe(410); // 400-100-40 + 150
-    expect(f.productSales).toBe(100);
-    expect(f.productSalesGpay).toBe(100);
+    // The 40 discount is shared 90% / 10% between services (300) and the product (100) it was given on.
+    expect(f.serviceRevenue).toBe(420); // 300 × 0.9 + 150
+    expect(f.productSales).toBe(90); // 100 × 0.9
+    expect(f.productSalesGpay).toBe(90);
+    expect(f.serviceRevenue + f.productSales).toBe(f.revenue);
     expect(f.tips).toBe(50);
     expect(f.gpayCollected).toBe(410);
     expect(f.cashCollected).toBe(150);
@@ -53,7 +61,7 @@ describe('aggregateFinance', () => {
 
   it('computes net in hand after expenses, advances, payouts and withdrawals', () => {
     const f = aggregateFinance(
-      [session({ subtotal: 1000, tipAmount: 100, totalAmount: 1100 })],
+      [session({ subtotal: 1000, tipAmount: 100, totalAmount: 1100, services: [{ serviceName: 'Colour', price: 1000 }] })],
       [
         { branchId: 'b1', type: 'GENERAL_EXPENSE', amount: 200, paymentMode: PaymentMode.CASH, createdAt: new Date() },
         { branchId: 'b1', type: 'GENERAL_EXPENSE', amount: 50, paymentMode: PaymentMode.GPAY, createdAt: new Date() },
@@ -71,6 +79,58 @@ describe('aggregateFinance', () => {
     expect(f.tipWithdrawals).toBe(100);
     // 1000 revenue + 100 tips - 250 expenses - 100 advances - 150 commission - 100 withdrawals
     expect(f.netInHand).toBe(500);
+  });
+
+  it('keeps product-only sales out of the customer count and never reports negative service revenue', () => {
+    const f = aggregateFinance(
+      [
+        // 599 of products, 10% off (59.90), paid in cash: a walk-in who bought a product only.
+        session({
+          subtotal: 599,
+          discountAmount: 59.9,
+          totalAmount: 539.1,
+          products: [{ price: 599, paymentMode: PaymentMode.CASH }],
+        }),
+        session({ subtotal: 200, totalAmount: 200, services: [{ serviceName: 'Haircut', price: 200 }] }),
+      ],
+      [],
+      [],
+    );
+    expect(f.customers).toBe(1);
+    expect(f.productOnlySales).toBe(1);
+    expect(f.productOnlyRevenue).toBe(539.1);
+    expect(f.revenue).toBe(739.1);
+    expect(f.serviceRevenue).toBe(200);
+    expect(f.productSales).toBe(539.1);
+    expect(f.cashCollected).toBe(739.1);
+  });
+
+  it('always splits revenue exactly into services + products, whatever the discount', () => {
+    const cases: [number, number, number][] = [
+      [333.33, 66.67, 40],
+      [1, 0.01, 0.5],
+      [999.99, 0.01, 99.99],
+      [250, 250, 100],
+    ];
+    for (const [services, products, discount] of cases) {
+      const subtotal = services + products;
+      const total = Math.round((subtotal - discount) * 100) / 100;
+      const f = aggregateFinance(
+        [
+          session({
+            subtotal,
+            discountAmount: discount,
+            totalAmount: total,
+            services: [{ serviceName: 'S', price: services }],
+            products: [{ price: products, paymentMode: PaymentMode.CASH }],
+          }),
+        ],
+        [],
+        [],
+      );
+      expect(Math.round((f.serviceRevenue + f.productSales) * 100)).toBe(Math.round(f.revenue * 100));
+      expect(f.serviceRevenue).toBeGreaterThanOrEqual(0);
+    }
   });
 
   it('is all zeros for an empty period', () => {

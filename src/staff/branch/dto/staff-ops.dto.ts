@@ -8,6 +8,7 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -22,7 +23,22 @@ export class StatsQueryDto {
   period: 'TODAY' | 'THIS_WEEK' | 'THIS_MONTH' = 'TODAY';
 }
 
+const DATE_RULE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Which day's books a request is about; today when left out. */
+export class BooksDateQueryDto {
+  @ApiPropertyOptional({ example: '2026-10-05', description: 'Calendar day (IST), up to 60 days back' })
+  @IsOptional()
+  @Matches(DATE_RULE, { message: 'date must be YYYY-MM-DD.' })
+  date?: string;
+}
+
 export class SetOpeningBalanceDto {
+  @ApiPropertyOptional({ example: '2026-10-05', description: 'Day to record (defaults to today)' })
+  @IsOptional()
+  @Matches(DATE_RULE, { message: 'date must be YYYY-MM-DD.' })
+  date?: string;
+
   @ApiProperty({ example: 10000 })
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
@@ -37,6 +53,11 @@ export class SetOpeningBalanceDto {
 }
 
 export class CloseDayDto {
+  @ApiPropertyOptional({ example: '2026-10-05', description: 'Day to close (defaults to today)' })
+  @IsOptional()
+  @Matches(DATE_RULE, { message: 'date must be YYYY-MM-DD.' })
+  date?: string;
+
   @ApiProperty({ example: 9450, description: 'Cash physically counted' })
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })

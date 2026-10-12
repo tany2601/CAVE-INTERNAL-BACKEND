@@ -14,9 +14,13 @@ import { PinVaultService } from '../../common/security/pin-vault.service.js';
 import { SetupAdminDto } from './dto/setup-admin.dto.js';
 import { ChangeAdminPinDto } from './dto/change-admin-pin.dto.js';
 import { AdminLoginDto } from './dto/admin-login.dto.js';
+import { LoginThrottle } from '../../common/security/rate-limit.js';
 
 @Injectable()
 export class AdminAuthService {
+  /** The admin PIN is 6 digits, so repeated wrong guesses from one client are locked out. */
+  private readonly loginThrottle = new LoginThrottle(5, 10 * 60 * 1000);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly pinService: PinService,
@@ -134,7 +138,11 @@ export class AdminAuthService {
     };
   }
 
-  async login(dto: AdminLoginDto) {
+  async login(dto: AdminLoginDto, clientIp = 'global') {
+    const lockedFor = this.loginThrottle.lockedFor(clientIp);
+    if (lockedFor > 0) {
+      throw new UnauthorizedException('Too many failed login attempts. Please try again later.');
+    }
     // 1. Validate PIN format using PinService
     if (!this.pinService.validatePin(dto.pin)) {
       throw new UnauthorizedException('Invalid PIN.');
@@ -176,8 +184,10 @@ export class AdminAuthService {
     );
 
     if (!isValidPin) {
+      this.loginThrottle.fail(clientIp);
       throw new UnauthorizedException('Invalid PIN or admin account not found.');
     }
+    this.loginThrottle.succeed(clientIp);
 
     // 6. Generate JWT with sub as admin user ID and role as "ADMIN"
     const accessToken = this.generateJwtToken(

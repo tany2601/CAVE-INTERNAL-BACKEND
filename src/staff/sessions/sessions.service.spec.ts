@@ -111,6 +111,7 @@ describe('SessionsService (Salon Customer Workflow)', () => {
         findUnique: vi.fn(),
         findFirst: vi.fn(),
         update: vi.fn(),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       sessionService: {
         createMany: vi.fn(),
@@ -432,6 +433,7 @@ describe('SessionsService (Salon Customer Workflow)', () => {
 
       prisma.branchServicePricing.findMany.mockResolvedValue([mockMenuPricing]);
       prisma.customer.findUnique.mockResolvedValue(mockCustomer);
+      prisma.customer.update.mockResolvedValue({ ...mockCustomer, qualifyingCompletedSessionsCount: 6 });
 
       const dto = {
         services: [{ servicePricingId: 'sp-1' }],
@@ -444,14 +446,43 @@ describe('SessionsService (Salon Customer Workflow)', () => {
       expect(result.session?.status).toBe('COMPLETED');
       expect(result.session?.customer?.qualifyingCompletedSessionsCount).toBe(6);
       expect(result.session?.customer?.rewardEarned).toBe(true);
+      // The visit is counted atomically (+1 in the database), then the reward flag is set on the 6th.
       expect(prisma.customer.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({
-            qualifyingCompletedSessionsCount: 6,
-            rewardEarned: true,
-          }),
-        }),
+        expect.objectContaining({ data: { qualifyingCompletedSessionsCount: { increment: 1 } } }),
       );
+      expect(prisma.customer.update).toHaveBeenCalledWith(expect.objectContaining({ data: { rewardEarned: true } }));
+    });
+
+    it('8b. Closing the same bill twice at once: the second request gets the finished bill and counts nothing', async () => {
+      prisma.branch.findUnique.mockResolvedValue(mockBranch);
+      const active = { id: 'session-1', branchId: mockBranch.id, customerId: mockCustomer.id, customer: mockCustomer, status: SessionStatus.ACTIVE, isLoyaltyCounted: false, services: [], products: [] };
+      prisma.session.findUnique
+        .mockResolvedValueOnce(active)
+        .mockResolvedValueOnce({ ...active, status: SessionStatus.COMPLETED, subtotal: 500, totalAmount: 500, discountAmount: 0, tipAmount: 0 });
+      prisma.branchServicePricing.findMany.mockResolvedValue([mockMenuPricing]);
+      prisma.session.updateMany.mockResolvedValue({ count: 0 }); // the other request already closed it
+
+      const res = await service.closeSession(mockReqUser, 'session-1', { services: [{ servicePricingId: 'sp-1' }], paymentMode: PaymentMode.CASH });
+
+      expect(res.message).toBe('Session is already closed and billed');
+      expect(prisma.customer.update).not.toHaveBeenCalled();
+      expect(prisma.sessionService.createMany).not.toHaveBeenCalled();
+    });
+
+    it('8c. Bills again when the customer\'s visit number changed while billing (another branch closed theirs first)', async () => {
+      prisma.branch.findUnique.mockResolvedValue(mockBranch);
+      // Looked like visit 6 (count 5, free) but another branch counted a visit first: this is really visit 7 (paid)
+      const active = { id: 'session-1', branchId: mockBranch.id, customerId: mockCustomer.id, customer: mockCustomer, status: SessionStatus.ACTIVE, isLoyaltyCounted: false, services: [], products: [] };
+      prisma.session.findUnique.mockResolvedValue(active);
+      prisma.branchServicePricing.findMany.mockResolvedValue([{ ...mockMenuPricing, service: { name: 'Haircut' } }]);
+      prisma.customer.update
+        .mockResolvedValueOnce({ ...mockCustomer, qualifyingCompletedSessionsCount: 7 }) // 1st attempt: prior = 6, not free
+        .mockResolvedValue({ ...mockCustomer, qualifyingCompletedSessionsCount: 7 });
+
+      await service.closeSession(mockReqUser, 'session-1', { services: [{ servicePricingId: 'sp-1' }], paymentMode: PaymentMode.CASH });
+
+      const claims = prisma.session.updateMany.mock.calls.map((c: any) => c[0].data);
+      expect(claims.at(-1)).toMatchObject({ isFreeVisit: false, subtotal: mockMenuPricing.price });
     });
 
     it('9. Idempotency: Retrying closeSession on COMPLETED session returns billed session without re-incrementing loyalty count', async () => {

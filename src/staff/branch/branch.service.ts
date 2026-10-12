@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
   UnauthorizedException,
+  Optional,
 } from '@nestjs/common';
 import {
   PaymentMode,
@@ -12,6 +13,7 @@ import {
   TransactionType,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { WhatsappSettings } from '../../whatsapp/whatsapp.settings.js';
 import { SessionsService } from '../sessions/sessions.service.js';
 import { CreateStaffExpenseDto } from './dto/create-staff-expense.dto.js';
 import {
@@ -20,9 +22,11 @@ import {
   SetOpeningBalanceDto,
 } from './dto/staff-ops.dto.js';
 import { computeCommission, round2 } from '../../common/commission.util.js';
+import { isFreeVisitNext } from '../../common/loyalty.js';
 import {
   dayDate,
   dayKey,
+  addDaysToKey,
   dayStart,
   minutesBetween,
   periodRange,
@@ -49,6 +53,7 @@ export class BranchOpsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly sessionsService: SessionsService,
+    @Optional() private readonly whatsappSettings?: WhatsappSettings,
   ) {}
 
   private async resolveBranch(reqUser: any) {
@@ -104,6 +109,37 @@ export class BranchOpsService {
   }
 
   /**
+   * Service counts per stylist over the last 30 days, used only for the "specialty" label. The label
+   * changes slowly while dashboards refresh every few seconds, so it is cached for ten minutes per branch
+   * instead of re-reading a month of service lines on every refresh.
+   */
+  private readonly specialtyCache = new Map<string, { at: number; counts: Map<string, Map<string, number>> }>();
+  private async specialtyFor(branchId: string, since: Date) {
+    const hit = this.specialtyCache.get(branchId);
+    if (hit && Date.now() - hit.at < 10 * 60_000) return hit.counts;
+    const rows = await this.prisma.sessionService.findMany({
+      where: {
+        session: {
+          branchId,
+          status: SessionStatus.COMPLETED,
+          closedAt: { gte: since },
+          stylistId: { not: null },
+        },
+      },
+      select: { serviceName: true, session: { select: { stylistId: true } } },
+    });
+    const counts = new Map<string, Map<string, number>>();
+    for (const h of rows) {
+      const sid = h.session.stylistId as string;
+      const m = counts.get(sid) ?? new Map<string, number>();
+      m.set(h.serviceName, (m.get(h.serviceName) ?? 0) + 1);
+      counts.set(sid, m);
+    }
+    this.specialtyCache.set(branchId, { at: Date.now(), counts });
+    return counts;
+  }
+
+  /**
    * Per-stylist stats for [start, now): sessions, revenue, tips, commission and
    * the services performed. Revenue excludes tips.
    */
@@ -138,18 +174,8 @@ export class BranchOpsService {
           services: { select: { serviceName: true } },
         },
       }),
-      // Specialty = most-billed services per stylist over the last 30 days.
-      this.prisma.sessionService.findMany({
-        where: {
-          session: {
-            branchId,
-            status: SessionStatus.COMPLETED,
-            closedAt: { gte: monthAgo },
-            stylistId: { not: null },
-          },
-        },
-        select: { serviceName: true, session: { select: { stylistId: true } } },
-      }),
+      // Specialty = most-billed services per stylist over the last 30 days (cached, see specialtyFor).
+      this.specialtyFor(branchId, monthAgo),
       // Month-to-date revenue drives MONTHLY_TARGET slab selection.
       this.prisma.session.groupBy({
         by: ['stylistId'],
@@ -185,13 +211,7 @@ export class BranchOpsService {
     }
     const tipsPaid = new Map(tipPayouts.map((r) => [r.userId, Number(r._sum.amount ?? 0)]));
 
-    const specialtyCounts = new Map<string, Map<string, number>>();
-    for (const h of history) {
-      const sid = h.session.stylistId as string;
-      const m = specialtyCounts.get(sid) ?? new Map<string, number>();
-      m.set(h.serviceName, (m.get(h.serviceName) ?? 0) + 1);
-      specialtyCounts.set(sid, m);
-    }
+    const specialtyCounts = history;
     const mtd = new Map(
       mtdRows.map((r) => [
         r.stylistId as string,
@@ -338,7 +358,8 @@ export class BranchOpsService {
       branch: { id: branch.id, name: branch.name, code: branch.code },
       stylists: stats.map((s) => ({
         ...s,
-        commissionPaid: (paidBy.get(s.id) ?? 0) > 0,
+        // Settled only when what was paid covers what has been earned so far (more can accrue after a payout).
+        commissionPaid: s.commission > 0 && (paidBy.get(s.id) ?? 0) + 0.005 >= s.commission,
         commissionPaidAmount: round2(paidBy.get(s.id) ?? 0),
       })),
       activeSessions: active.map((s) => this.sessionsService.formatSessionOutput(s)),
@@ -362,6 +383,8 @@ export class BranchOpsService {
         createdAt: p.createdAt,
       })),
       day: this.formatDay(dayRow),
+      // How bills reach customers, so the staff app knows whether to offer a WhatsApp button.
+      whatsapp: (await this.whatsappSettings?.getDelivery()) ?? { mode: 'off', billFormat: 'text' },
     };
   }
 
@@ -381,13 +404,13 @@ export class BranchOpsService {
         rewardReady: false,
       };
     }
-    // Backend flags the reward on every 6th qualifying completed session.
+    // Visits 1–5 are paid and the 6th has a free haircut, so the reward is "ready" after the 5th.
     const count = customer.qualifyingCompletedSessionsCount;
-    const rewardReady = count > 0 && count % LOYALTY_TARGET === 0;
+    const rewardReady = isFreeVisitNext(count);
     return {
       found: true,
       name: customer.name,
-      visitCount: rewardReady ? LOYALTY_TARGET : count % LOYALTY_TARGET,
+      visitCount: count % LOYALTY_TARGET,
       loyaltyTarget: LOYALTY_TARGET,
       rewardReady,
     };
@@ -454,9 +477,25 @@ export class BranchOpsService {
 
   // ── Opening / closing balances ─────────────────────────────────────
 
+  /** The day a books request is about: today, or an earlier day (up to 60 days back) for catching up. */
+  private booksDate(requested?: string): string {
+    const today = dayKey();
+    if (!requested) return today;
+    const valid =
+      /^\d{4}-\d{2}-\d{2}$/.test(requested) &&
+      !Number.isNaN(Date.parse(`${requested}T00:00:00Z`)) &&
+      dayKey(dayStart(requested)) === requested;
+    if (!valid) throw new BadRequestException('That is not a valid date.');
+    if (requested > today) throw new BadRequestException("You can't record books for a future day.");
+    if (requested < addDaysToKey(today, -60)) {
+      throw new BadRequestException('Books can only be recorded for the last 60 days.');
+    }
+    return requested;
+  }
+
   async setOpeningBalance(reqUser: any, dto: SetOpeningBalanceDto) {
     const branch = await this.resolveBranch(reqUser);
-    const date = dayDate(dayKey());
+    const date = dayDate(this.booksDate(dto.date));
     const existing = await this.prisma.dailyBalance.findUnique({
       where: { branchId_date: { branchId: branch.id, date } },
     });
@@ -484,15 +523,16 @@ export class BranchOpsService {
   /** Cash / GPay the branch should be holding right now, per the ledger. */
   private async expectedBalances(branchId: string, key: string, opening: { cash: number; gpay: number }) {
     const since = dayStart(key);
+    const until = dayStart(addDaysToKey(key, 1)); // the books for a day cover that IST day only
     const [sessions, expenses, payouts] = await Promise.all([
       this.prisma.session.groupBy({
         by: ['paymentMode'],
-        where: { branchId, status: SessionStatus.COMPLETED, closedAt: { gte: since } },
+        where: { branchId, status: SessionStatus.COMPLETED, closedAt: { gte: since, lt: until } },
         _sum: { totalAmount: true },
       }),
       this.prisma.branchTransaction.groupBy({
         by: ['paymentMode'],
-        where: { branchId, createdAt: { gte: since } },
+        where: { branchId, createdAt: { gte: since, lt: until } },
         _sum: { amount: true },
       }),
       this.prisma.staffPayout.groupBy({
@@ -513,12 +553,20 @@ export class BranchOpsService {
     return {
       expectedCash: calc(PaymentMode.CASH, opening.cash),
       expectedGpay: calc(PaymentMode.GPAY, opening.gpay),
+      flow: {
+        salesCash: round2(pick(sessions, PaymentMode.CASH, 'totalAmount')),
+        salesGpay: round2(pick(sessions, PaymentMode.GPAY, 'totalAmount')),
+        expensesCash: round2(pick(expenses, PaymentMode.CASH, 'amount')),
+        expensesGpay: round2(pick(expenses, PaymentMode.GPAY, 'amount')),
+        payoutsCash: round2(pick(payouts, PaymentMode.CASH, 'amount')),
+        payoutsGpay: round2(pick(payouts, PaymentMode.GPAY, 'amount')),
+      },
     };
   }
 
   async closeDay(reqUser: any, dto: CloseDayDto) {
     const branch = await this.resolveBranch(reqUser);
-    const key = dayKey();
+    const key = this.booksDate(dto.date);
     const date = dayDate(key);
     const existing = await this.prisma.dailyBalance.findUnique({
       where: { branchId_date: { branchId: branch.id, date } },
@@ -526,10 +574,11 @@ export class BranchOpsService {
     if (existing?.closedAt) {
       throw new ConflictException("Today's books are already closed.");
     }
-    const expected = await this.expectedBalances(branch.id, key, {
+    const { expectedCash, expectedGpay } = await this.expectedBalances(branch.id, key, {
       cash: Number(existing?.openingCash ?? 0),
       gpay: Number(existing?.openingGpay ?? 0),
     });
+    const expected = { expectedCash, expectedGpay };
     const row = await this.prisma.dailyBalance.upsert({
       where: { branchId_date: { branchId: branch.id, date } },
       create: {
@@ -550,6 +599,68 @@ export class BranchOpsService {
     return this.formatDay(row);
   }
 
+  /** One day's books: opening / closing state plus what the ledger says the till should hold. */
+  async getDay(reqUser: any, date?: string) {
+    const branch = await this.resolveBranch(reqUser);
+    const key = this.booksDate(date);
+    const row = await this.prisma.dailyBalance.findUnique({
+      where: { branchId_date: { branchId: branch.id, date: dayDate(key) } },
+    });
+    const ledger = await this.expectedBalances(branch.id, key, {
+      cash: Number(row?.openingCash ?? 0),
+      gpay: Number(row?.openingGpay ?? 0),
+    });
+    return {
+      ...this.formatDay(row ?? null),
+      date: key,
+      // Once closed, the figures stored at closing are the record; before that, the live ledger.
+      expectedCash: row?.closedAt ? Number(row.expectedCash ?? ledger.expectedCash) : ledger.expectedCash,
+      expectedGpay: row?.closedAt ? Number(row.expectedGpay ?? ledger.expectedGpay) : ledger.expectedGpay,
+      flow: ledger.flow,
+    };
+  }
+
+  /**
+   * Recent days (up to a week back, today excluded) that had business but whose opening or closing
+   * was never recorded, so a forgotten entry can be added the next day.
+   */
+  async getPendingDays(reqUser: any) {
+    const branch = await this.resolveBranch(reqUser);
+    const today = dayKey();
+    const from = addDaysToKey(today, -7);
+    const [sessions, transactions, payouts, rows] = await Promise.all([
+      this.prisma.session.findMany({
+        where: { branchId: branch.id, status: SessionStatus.COMPLETED, closedAt: { gte: dayStart(from), lt: dayStart(today) } },
+        select: { closedAt: true },
+      }),
+      this.prisma.branchTransaction.findMany({
+        where: { branchId: branch.id, createdAt: { gte: dayStart(from), lt: dayStart(today) } },
+        select: { createdAt: true },
+      }),
+      this.prisma.staffPayout.findMany({
+        where: { branchId: branch.id, forDate: { gte: dayDate(from), lt: dayDate(today) } },
+        select: { forDate: true },
+      }),
+      this.prisma.dailyBalance.findMany({
+        where: { branchId: branch.id, date: { gte: dayDate(from), lt: dayDate(today) } },
+      }),
+    ]);
+    const busy = new Set<string>();
+    for (const s of sessions) if (s.closedAt) busy.add(dayKey(s.closedAt));
+    for (const t of transactions) busy.add(dayKey(t.createdAt));
+    for (const p of payouts) busy.add(p.forDate.toISOString().slice(0, 10));
+    const byDate = new Map(rows.map((r) => [r.date.toISOString().slice(0, 10), r]));
+    const data = [...busy]
+      .sort()
+      .reverse()
+      .map((date) => {
+        const row = byDate.get(date);
+        return { date, openingMissing: !row?.openingSetAt, closingMissing: !row?.closedAt };
+      })
+      .filter((d) => d.openingMissing || d.closingMissing);
+    return { data };
+  }
+
   // ── Commission payout ledger ───────────────────────────────────────
 
   async createPayout(reqUser: any, dto: CreatePayoutDto) {
@@ -566,15 +677,23 @@ export class BranchOpsService {
 
     let amount = dto.amount;
     if (kind === PayoutKind.COMMISSION) {
-      const alreadyPaid = await this.prisma.staffPayout.count({
-        where: { branchId: branch.id, userId: staff.id, kind, forDate: dayDate(key) },
-      });
-      if (alreadyPaid > 0) {
+      // Commission keeps accruing after a payout (more customers, more revenue), so pay only what is
+      // still owed: earned so far minus what was already handed over today.
+      const [stats, paidRows] = await Promise.all([
+        this.buildStylistStats(branch.id, dayStart(key)),
+        this.prisma.staffPayout.aggregate({
+          where: { branchId: branch.id, userId: staff.id, kind, forDate: dayDate(key) },
+          _sum: { amount: true },
+        }),
+      ]);
+      const earned = stats.find((s) => s.id === staff.id)?.commission ?? 0;
+      const owed = round2(earned - Number(paidRows._sum.amount ?? 0));
+      if (owed <= 0) {
         throw new ConflictException("This stylist's commission is already settled today.");
       }
-      if (amount === undefined) {
-        const stats = await this.buildStylistStats(branch.id, dayStart(key));
-        amount = stats.find((s) => s.id === staff.id)?.commission ?? 0;
+      if (amount === undefined) amount = owed;
+      if (amount > owed + 0.001) {
+        throw new BadRequestException(`Only ₹${owed} of commission is still owed to this stylist.`);
       }
     }
     if (kind === PayoutKind.TIP_WITHDRAWAL) {

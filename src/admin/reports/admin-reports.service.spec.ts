@@ -11,6 +11,7 @@ describe('AdminReportsService', () => {
     prisma = {
       session: { groupBy: vi.fn() },
       branch: { findMany: vi.fn().mockResolvedValue([{ id: 'b1', name: 'CAVE Karkala' }]) },
+      staffPayout: { findMany: vi.fn().mockResolvedValue([]) },
     };
     service = new AdminReportsService(prisma);
   });
@@ -61,5 +62,19 @@ describe('AdminReportsService', () => {
       branchId: 'b1',
     } as any);
     expect(prisma.session.groupBy.mock.calls[0][0].where.branchId).toBe('b1');
+  });
+
+  it('reports commission and tips handed to staff so net position can subtract them', async () => {
+    prisma.session.groupBy.mockResolvedValue([
+      { branchId: 'b1', paymentMode: PaymentMode.CASH, _sum: { totalAmount: 1000, tipAmount: 0 }, _count: { _all: 1 } },
+    ]);
+    prisma.staffPayout.findMany.mockResolvedValue([
+      { kind: 'COMMISSION', amount: '254.82', paymentMode: PaymentMode.CASH, forDate: new Date(), branchId: 'b1', userId: 'u1' },
+      { kind: 'COMMISSION', amount: '45.18', paymentMode: PaymentMode.CASH, forDate: new Date(), branchId: 'b1', userId: 'u1' },
+      { kind: 'TIP_WITHDRAWAL', amount: '50', paymentMode: PaymentMode.CASH, forDate: new Date(), branchId: 'b1', userId: 'u1' },
+    ]);
+    const res = await service.getRevenueSummary({ period: SummaryPeriod.TODAY } as any);
+    expect(res.commissionPaid).toBe(300);
+    expect(res.tipWithdrawals).toBe(50);
   });
 });
