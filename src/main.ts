@@ -68,6 +68,9 @@ async function bootstrap() {
   };
   app.use('/api/admin/whatsapp/test', hourly(10, 'Too many test reports. Try again in an hour.'));
   app.use('/api/admin/whatsapp/offers', hourly(6, 'Too many offers sent this hour. Try again later.'));
+  // The assistant: chat is cheap, but speech costs money at the voice service, so cap it.
+  app.use('/api/admin/assistant/speak', hourly(120, 'The assistant has spoken a lot this hour. Try again shortly.'));
+  app.use('/api/admin/assistant/chat', createRateLimiter({ windowMs: 60_000, max: 60 }));
   app.use('/api', createRateLimiter({ windowMs: 60_000, max: 600 }));
 
   app.useGlobalPipes(

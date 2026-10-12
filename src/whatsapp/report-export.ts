@@ -27,15 +27,17 @@ export function reportRange(from?: string, to?: string, now: Date = new Date()):
 export class ReportExport {
   constructor(private readonly prisma: PrismaService) {}
 
-  async model(from: string, to: string): Promise<ReportModel> {
+  /** `branchId` limits everything to one branch (the assistant's per-branch reports); omit it for the whole business. */
+  async model(from: string, to: string, branchId?: string): Promise<ReportModel> {
     const start = dayStart(from);
     const end = dayStart(addDaysToKey(to, 1));
     const monthStart = dayStart(`${to.slice(0, 8)}01`);
+    const only = branchId ? { branchId } : {};
 
     const [branches, sessions, transactions, payouts, monthSessions] = await Promise.all([
-      this.prisma.branch.findMany({ orderBy: { createdAt: 'asc' }, select: { id: true, name: true, isActive: true } }),
+      this.prisma.branch.findMany({ where: branchId ? { id: branchId } : {}, orderBy: { createdAt: 'asc' }, select: { id: true, name: true, isActive: true } }),
       this.prisma.session.findMany({
-        where: { status: SessionStatus.COMPLETED, closedAt: { gte: start, lt: end } },
+        where: { status: SessionStatus.COMPLETED, closedAt: { gte: start, lt: end }, ...only },
         orderBy: { closedAt: 'asc' },
         select: {
           id: true,
@@ -62,7 +64,7 @@ export class ReportExport {
         },
       }) as unknown as Promise<ReportSession[]>,
       this.prisma.branchTransaction.findMany({
-        where: { createdAt: { gte: start, lt: end } },
+        where: { createdAt: { gte: start, lt: end }, ...only },
         orderBy: { createdAt: 'asc' },
         select: {
           branchId: true,
@@ -76,7 +78,7 @@ export class ReportExport {
         },
       }) as unknown as Promise<ReportTransaction[]>,
       this.prisma.staffPayout.findMany({
-        where: { forDate: { gte: new Date(`${from}T00:00:00Z`), lte: new Date(`${to}T00:00:00Z`) } },
+        where: { forDate: { gte: new Date(`${from}T00:00:00Z`), lte: new Date(`${to}T00:00:00Z`) }, ...only },
         orderBy: { forDate: 'asc' },
         select: {
           userId: true,
@@ -90,7 +92,7 @@ export class ReportExport {
         },
       }) as unknown as Promise<ReportPayout[]>,
       this.prisma.session.findMany({
-        where: { status: SessionStatus.COMPLETED, closedAt: { gte: monthStart, lt: end }, stylistId: { not: null } },
+        where: { status: SessionStatus.COMPLETED, closedAt: { gte: monthStart, lt: end }, stylistId: { not: null }, ...only },
         select: { stylistId: true, totalAmount: true, tipAmount: true },
       }),
     ]);
@@ -132,8 +134,10 @@ export class ReportExport {
   }
 
   /** The Excel report for [from, to] and the model it was built from. */
-  async generate(from: string, to: string): Promise<{ file: Buffer; fileName: string; model: ReportModel }> {
-    const model = await this.model(from, to);
-    return { file: await renderReportXlsx(model), fileName: reportFileName(from, to), model };
+  async generate(from: string, to: string, branchId?: string): Promise<{ file: Buffer; fileName: string; model: ReportModel }> {
+    const model = await this.model(from, to, branchId);
+    const base = reportFileName(from, to);
+    const name = model.branches.length === 1 && branchId ? base.replace('CAVE-report', `CAVE-${model.branches[0].name.replace(/^CAVE\s+/i, '').replace(/[^A-Za-z0-9]+/g, '-')}-report`) : base;
+    return { file: await renderReportXlsx(model), fileName: name, model };
   }
 }

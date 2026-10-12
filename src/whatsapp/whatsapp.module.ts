@@ -18,6 +18,6 @@ import { WhatsappSettings } from './whatsapp.settings.js';
   imports: [ConfigModule],
   controllers: [WhatsappController, WhatsappWebhookController],
   providers: [WhatsappSuppression, WhatsappWebhook, ReportExport, WhatsappClient, WhatsappOutbox, WhatsappSettings, WhatsappOffers, WhatsappReports, WhatsappService, JwtAuthGuard, RolesGuard],
-  exports: [WhatsappService, WhatsappSettings],
+  exports: [WhatsappService, WhatsappSettings, ReportExport],
 })
 export class WhatsappModule {}
