@@ -370,6 +370,27 @@ describe('natural voice', () => {
     expect(JSON.parse(init.body)).toMatchObject({ text: 'Hello boss', model_id: 'eleven_multilingual_v2' });
   });
 
+  it('explains why when ElevenLabs refuses (like a free plan using a library voice), without leaking the key', async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 402,
+      json: async () => ({ detail: { message: 'Free users cannot use library voices via the API. Add $5 of credits: https://elevenlabs.io/app' } }),
+      arrayBuffer: async () => new ArrayBuffer(0),
+    });
+    const err = await new TtsService(cfg({ ELEVENLABS_API_KEY: 'xk-secret', ELEVENLABS_VOICE_ID: 'v' })).speak('hi').catch((e) => e);
+    expect(err).toBeInstanceOf(BadGatewayException);
+    expect(err.message).toMatch(/^ElevenLabs said 402: Free users cannot use library voices/);
+    expect(err.message).not.toMatch(/xk-secret|https?:/);
+  });
+
+  it('uses the newest ElevenLabs models without the old expressiveness settings', async () => {
+    ok();
+    await new TtsService(cfg({ ELEVENLABS_API_KEY: 'k', ELEVENLABS_VOICE_ID: 'v', ELEVENLABS_MODEL: 'eleven_v4' })).speak('Hello');
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body).toMatchObject({ model_id: 'eleven_v4', language_code: 'en' });
+    expect(body.voice_settings).toBeUndefined();
+  });
+
   it('pays for the same sentence once, trims long text, and never leaks the key in errors', async () => {
     ok();
     const tts = new TtsService(cfg({ OPENAI_API_KEY: 'sk-secret' }));

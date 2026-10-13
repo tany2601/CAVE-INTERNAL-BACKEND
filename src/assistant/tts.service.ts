@@ -49,7 +49,7 @@ export class TtsService {
     return audio;
   }
 
-  private async post(url: string, headers: Record<string, string>, body: unknown): Promise<Buffer> {
+  private async post(label: string, url: string, headers: Record<string, string>, body: unknown): Promise<Buffer> {
     let res: Response;
     try {
       res = await fetch(url, {
@@ -60,12 +60,20 @@ export class TtsService {
       });
     } catch (e) {
       this.logger.warn(`Voice request failed: ${(e as Error).message}`);
-      throw new BadGatewayException('The voice service could not be reached.');
+      throw new BadGatewayException(`${label} could not be reached.`);
     }
     if (!res.ok) {
-      // The key and the text are never logged, only the status.
-      this.logger.warn(`Voice service answered ${res.status}`);
-      throw new BadGatewayException('The voice service refused the request.');
+      // Say why (the provider's own explanation: a plan limit, a wrong voice id…). The key and the text are never included.
+      let why = '';
+      try {
+        const j = (await res.json()) as { detail?: { message?: string } | string; error?: { message?: string }; message?: string };
+        why = (typeof j.detail === 'string' ? j.detail : j.detail?.message) ?? j.error?.message ?? j.message ?? '';
+      } catch {
+        // no readable explanation
+      }
+      why = why.replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim().slice(0, 220);
+      this.logger.warn(`Voice service answered ${res.status}${why ? `: ${why}` : ''}`);
+      throw new BadGatewayException(`${label} said ${res.status}${why ? `: ${why}` : ''}`);
     }
     return Buffer.from(await res.arrayBuffer());
   }
@@ -73,6 +81,7 @@ export class TtsService {
   private async openai(input: string) {
     const base = this.config.get<string>('OPENAI_API_BASE') || 'https://api.openai.com';
     const audio = await this.post(
+      'OpenAI',
       `${base}/v1/audio/speech`,
       { Authorization: `Bearer ${this.config.get<string>('OPENAI_API_KEY')}` },
       {
@@ -89,13 +98,17 @@ export class TtsService {
   private async elevenlabs(input: string) {
     const base = this.config.get<string>('ELEVENLABS_API_BASE') || 'https://api.elevenlabs.io';
     const voice = encodeURIComponent(this.config.get<string>('ELEVENLABS_VOICE_ID')!);
+    const model = this.config.get<string>('ELEVENLABS_MODEL') || 'eleven_multilingual_v2';
+    // The newest models (v3 and later) pick their own delivery; the older ones take these expressiveness settings.
+    const newest = /eleven_v[3-9]/.test(model);
     const audio = await this.post(
+      'ElevenLabs',
       `${base}/v1/text-to-speech/${voice}?output_format=mp3_44100_128`,
       { 'xi-api-key': this.config.get<string>('ELEVENLABS_API_KEY')! },
       {
         text: input,
-        model_id: this.config.get<string>('ELEVENLABS_MODEL') || 'eleven_multilingual_v2',
-        voice_settings: { stability: 0.3, similarity_boost: 0.8, style: 0.6, use_speaker_boost: true },
+        model_id: model,
+        ...(newest ? { language_code: 'en' } : { voice_settings: { stability: 0.3, similarity_boost: 0.8, style: 0.6, use_speaker_boost: true } }),
       },
     );
     return { audio, mime: 'audio/mpeg' };
