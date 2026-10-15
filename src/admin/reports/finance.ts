@@ -11,6 +11,9 @@ export interface FinSession {
   paymentMode: PaymentMode | null;
   subtotal: unknown;
   discountAmount: unknown;
+  /** The discount on products alone, when the bill recorded it (otherwise the discount is shared in proportion). */
+  productDiscountAmount?: unknown;
+  serviceDiscountAmount?: unknown;
   tipAmount: unknown;
   totalAmount: unknown;
   startedAt: Date | null;
@@ -47,6 +50,8 @@ export const SESSION_FIN_SELECT = {
   paymentMode: true,
   subtotal: true,
   discountAmount: true,
+  serviceDiscountAmount: true,
+  productDiscountAmount: true,
   tipAmount: true,
   totalAmount: true,
   startedAt: true,
@@ -115,20 +120,24 @@ export function aggregateFinance(
     const subtotal = n(s.subtotal);
     const products = s.products.reduce((a, p) => a + n(p.price), 0);
     const revenue = n(s.totalAmount) - n(s.tipAmount);
-    // A bill-level discount is shared between services and products in proportion to their value, so
-    // neither line can go negative (e.g. a discounted products-only sale has no "service revenue").
+    // When the bill recorded the discount on the products and on the services separately, use that. Older bills
+    // only have one whole-bill discount, which is shared between services and products in proportion to their
+    // value, so neither line can go negative (e.g. a discounted products-only sale has no "service revenue").
+    const recorded = n(s.serviceDiscountAmount) + n(s.productDiscountAmount);
+    const exact = recorded > 0 && Math.abs(recorded - n(s.discountAmount)) < 0.005;
     const keep = subtotal > 0 ? 1 - Math.min(1, n(s.discountAmount) / subtotal) : 1;
+    const productKeep = exact ? (products > 0 ? 1 - Math.min(1, n(s.productDiscountAmount) / products) : 1) : keep;
     if (s.services.length > 0) f.customers += 1;
     else {
       f.productOnlySales += 1;
       f.productOnlyRevenue += revenue;
     }
     f.revenue += revenue;
-    f.serviceRevenue += (subtotal - products) * keep;
+    f.serviceRevenue += exact ? subtotal - products - n(s.serviceDiscountAmount) : (subtotal - products) * keep;
     f.tips += n(s.tipAmount);
     for (const p of s.products) {
-      if (p.paymentMode === PaymentMode.GPAY) f.productSalesGpay += n(p.price) * keep;
-      else f.productSalesCash += n(p.price) * keep;
+      if (p.paymentMode === PaymentMode.GPAY) f.productSalesGpay += n(p.price) * productKeep;
+      else f.productSalesCash += n(p.price) * productKeep;
     }
     if (s.paymentMode === PaymentMode.GPAY) f.gpayCollected += n(s.totalAmount);
     else f.cashCollected += n(s.totalAmount);

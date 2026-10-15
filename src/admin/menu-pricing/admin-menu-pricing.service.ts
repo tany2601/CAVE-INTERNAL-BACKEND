@@ -5,6 +5,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { sortMenu } from '../../common/menu-order.js';
 import { CreateBranchPricingDto } from './dto/create-branch-pricing.dto.js';
 import { UpdateBranchPricingDto } from './dto/update-branch-pricing.dto.js';
 import { ListBranchPricingQueryDto } from './dto/list-branch-pricing-query.dto.js';
@@ -43,27 +44,25 @@ export class AdminMenuPricingService {
       };
     }
 
-    const [pricing, total] = await Promise.all([
-      this.prisma.branchServicePricing.findMany({
-        where,
-        include: {
-          service: {
-            select: {
-              id: true,
-              name: true,
-              description: true,
-              category: true,
-              durationMin: true,
-              isActive: true,
-            },
+    // A menu has a few dozen services, so fetch them all, put them in menu order (Hair, Beard, Skin, Combo, other;
+    // see common/menu-order.ts) and then cut out the requested page.
+    const all = await this.prisma.branchServicePricing.findMany({
+      where,
+      include: {
+        service: {
+          select: {
+            id: true,
+            name: true,
+            description: true,
+            category: true,
+            durationMin: true,
+            isActive: true,
           },
         },
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: limit,
-      }),
-      this.prisma.branchServicePricing.count({ where }),
-    ]);
+      },
+    });
+    const total = all.length;
+    const pricing = sortMenu(all).slice(skip, skip + limit);
 
     const totalPages = total > 0 ? Math.ceil(total / limit) : 0;
 

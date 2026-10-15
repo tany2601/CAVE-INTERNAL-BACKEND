@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Resvg } from '@resvg/resvg-js';
-import { billNumber, inr, isWalkInName, priceLabel } from './whatsapp.format.js';
+import { billNumber, groupLines, inr, isWalkInName, priceLabel, withQty } from './whatsapp.format.js';
 
 /** Where fonts and the logo live: <backend>/assets, reachable from both src/ and dist/. */
 const ASSETS = fileURLToPath(new URL('../../assets/', import.meta.url));
@@ -164,8 +164,8 @@ export function renderBillSvg(b: BillImageData): { svg: string; height: number }
     }
     y += 10;
   };
-  for (const s of b.services) row(s.name, priceLabel(s.price));
-  for (const p of b.products) row(p.name, priceLabel(p.price));
+  for (const s of groupLines(b.services)) row(withQty(s.name, s.qty), priceLabel(s.total));
+  for (const p of groupLines(b.products)) row(withQty(p.name, p.qty), priceLabel(p.total));
   const extras = [
     ...(b.discountAmount > 0 ? [['Discount', `-${inr(b.discountAmount)}`, '#6FCF97'] as const] : []),
     ...(b.tipAmount > 0 ? [['Tip', inr(b.tipAmount), '#CFCFD8'] as const] : []),

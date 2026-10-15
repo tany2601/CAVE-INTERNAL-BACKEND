@@ -22,6 +22,8 @@ import { AdminSalaryPaymentsController } from './salary-payments/admin-salary-pa
 import { AdminSalaryPaymentsService } from './salary-payments/admin-salary-payments.service.js';
 import { AdminChecklistController } from './checklist/admin-checklist.controller.js';
 import { AdminChecklistService } from './checklist/admin-checklist.service.js';
+import { AdminDiscountsController } from './discounts/admin-discounts.controller.js';
+import { AdminDiscountsService } from './discounts/admin-discounts.service.js';
 import { AdminUploadsController } from './uploads/admin-uploads.controller.js';
 import { AdminUploadsService } from './uploads/admin-uploads.service.js';
 import { AdminProductsController } from './products/admin-products.controller.js';
@@ -45,6 +47,7 @@ import { RolesGuard } from '../common/guards/roles.guard.js';
     AdminChecklistController,
     AdminUploadsController,
     AdminProductsController,
+    AdminDiscountsController,
   ],
   providers: [
     AdminAuthService,
@@ -59,6 +62,7 @@ import { RolesGuard } from '../common/guards/roles.guard.js';
     AdminChecklistService,
     AdminUploadsService,
     AdminProductsService,
+    AdminDiscountsService,
     JwtAuthGuard,
     RolesGuard,
   ],

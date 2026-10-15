@@ -96,3 +96,26 @@ describe('loyalty line', () => {
     expect(renderBillSvg({ ...base, loyalty: { visits: 4 } }).svg).toContain('YOUR 4TH VISIT');
   });
 });
+
+describe('the same service several times on one bill', () => {
+  it('shows one line with the quantity and the combined price (a customer paying for friends too)', () => {
+    const { svg } = renderBillSvg(
+      bill({
+        services: [
+          { name: 'Haircut', price: 150 },
+          { name: 'Haircut', price: 150 },
+          { name: 'Haircut', price: 150 },
+          { name: 'Beard Trim', price: 100 },
+        ],
+        products: [],
+        discountAmount: 0,
+        tipAmount: 0,
+        totalAmount: 550,
+      }),
+    );
+    expect(svg).toContain('Haircut ×3');
+    expect(svg).toContain('₹450');
+    expect(svg.match(/Haircut/g)?.length).toBe(1);
+    expect(svg).toContain('Beard Trim');
+  });
+});

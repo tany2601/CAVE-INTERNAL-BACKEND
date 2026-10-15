@@ -14,6 +14,25 @@ export const inr = (n: number): string => {
 export const priceLabel = (n: number): string => (Number(n) === 0 ? 'FREE' : inr(n));
 
 /**
+ * Lines with the same name and price become one line with a quantity ("Haircut ×3"), so a customer paying for
+ * friends' haircuts sees one line and its total. A free line (price 0) stays apart from the paid ones.
+ */
+export function groupLines<T extends { name: string; price: number }>(lines: T[]): { name: string; price: number; qty: number; total: number }[] {
+  const out: { name: string; price: number; qty: number; total: number }[] = [];
+  for (const l of lines) {
+    const found = out.find((o) => o.name === l.name && o.price === l.price);
+    if (found) {
+      found.qty += 1;
+      found.total = Math.round((found.total + l.price) * 100) / 100;
+    } else out.push({ name: l.name, price: l.price, qty: 1, total: l.price });
+  }
+  return out;
+}
+
+/** "Haircut" or "Haircut ×3" */
+export const withQty = (name: string, qty: number) => (qty > 1 ? `${name} ×${qty}` : name);
+
+/**
  * A phone number as WhatsApp wants it: country code + number, digits only.
  * 10-digit Indian numbers get 91 added; anything that can't be a real number returns null.
  */
@@ -65,8 +84,8 @@ export const billNumber = (id: string) => id.replace(/-/g, '').slice(-6).toUpper
  */
 export function buildBillParams(s: BillSession): string[] {
   const lines = [
-    ...s.services.map((x) => `${x.serviceName} ${priceLabel(num(x.price))}`),
-    ...s.products.map((x) => `${x.productName} ${priceLabel(num(x.price))}`),
+    ...groupLines(s.services.map((x) => ({ name: x.serviceName, price: num(x.price) }))).map((x) => `${withQty(x.name, x.qty)} ${priceLabel(x.total)}`),
+    ...groupLines(s.products.map((x) => ({ name: x.productName, price: num(x.price) }))).map((x) => `${withQty(x.name, x.qty)} ${priceLabel(x.total)}`),
   ];
   if (num(s.discountAmount) > 0) lines.push(`Discount -${inr(num(s.discountAmount))}`);
   if (num(s.tipAmount) > 0) lines.push(`Tip ${inr(num(s.tipAmount))}`);

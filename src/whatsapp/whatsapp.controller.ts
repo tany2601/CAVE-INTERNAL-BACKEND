@@ -1,7 +1,8 @@
 import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, Matches, Max, MaxLength, Min, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard.js';
 import { RolesGuard } from '../common/guards/roles.guard.js';
 import { Roles } from '../common/decorators/roles.decorator.js';
@@ -10,12 +11,20 @@ import { WhatsappClient } from './whatsapp.client.js';
 import { WhatsappOffers } from './whatsapp.offers.js';
 import { WhatsappOutbox } from './whatsapp.outbox.js';
 import { WhatsappReports } from './whatsapp.reports.js';
-import { WhatsappSettings } from './whatsapp.settings.js';
+import { cleanTimes, WhatsappSettings } from './whatsapp.settings.js';
 import { WhatsappSuppression } from './whatsapp.suppression.js';
 import { WhatsappWebhook } from './whatsapp.webhook.js';
 import { toWhatsappNumber } from './whatsapp.format.js';
 import { ReportExport, reportRange } from './report-export.js';
 import { XLSX_MIME } from './report-xlsx.js';
+
+class ReportTimesDto {
+  @IsString() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'Use a time like 21:30.' }) dailyTime!: string;
+  @IsInt() @Min(0) @Max(6) weeklyDay!: number;
+  @IsString() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'Use a time like 09:00.' }) weeklyTime!: string;
+  @IsInt() @Min(1) @Max(28) monthlyDay!: number;
+  @IsString() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: 'Use a time like 09:00.' }) monthlyTime!: string;
+}
 
 class SaveReportSettingsDto {
   @IsArray()
@@ -28,6 +37,9 @@ class SaveReportSettingsDto {
   @IsBoolean() monthly!: boolean;
   /** Send the full Excel report with each report message. */
   @IsOptional() @IsBoolean() excel?: boolean;
+
+  /** When each report goes out (Indian time). Left out: keep what is saved. */
+  @IsOptional() @ValidateNested() @Type(() => ReportTimesDto) times?: ReportTimesDto;
 
   /** How bills are sent: off, automatically through the Business API, or by hand from the staff app. */
   @IsIn(['off', 'api', 'manual']) mode!: 'off' | 'api' | 'manual';
@@ -94,6 +106,7 @@ export class WhatsappController {
       weekly: s.weekly,
       monthly: s.monthly,
       excel: s.excel,
+      times: s.times,
       templates: this.client.templates,
     };
   }
@@ -107,7 +120,7 @@ export class WhatsappController {
       if (!n) throw new BadRequestException(`"${raw}" is not a valid mobile number.`);
       if (!phones.includes(n)) phones.push(n);
     }
-    await this.settings.save({ phones, daily: dto.daily, weekly: dto.weekly, monthly: dto.monthly, excel: dto.excel !== false });
+    await this.settings.save({ phones, daily: dto.daily, weekly: dto.weekly, monthly: dto.monthly, excel: dto.excel !== false, times: cleanTimes(dto.times ?? (await this.settings.get()).times) });
     await this.settings.saveDelivery({ mode: dto.mode, billFormat: dto.billFormat });
     return this.status();
   }

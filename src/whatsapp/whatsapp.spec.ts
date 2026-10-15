@@ -12,6 +12,8 @@ import { WhatsappClient, WhatsappSendError } from './whatsapp.client.js';
 import { RETRY_MINUTES, WhatsappOutbox } from './whatsapp.outbox.js';
 import { WhatsappService } from './whatsapp.service.js';
 import { dueReports, periodLabel, WhatsappReports } from './whatsapp.reports.js';
+import { cleanTimes, DEFAULT_TIMES } from './whatsapp.settings.js';
+import { groupLines, withQty } from './whatsapp.format.js';
 import { WhatsappSettings } from './whatsapp.settings.js';
 import { WhatsappOffers } from './whatsapp.offers.js';
 
@@ -106,6 +108,48 @@ describe('formatting', () => {
       'Daily', 'Tue, 6 Oct 2026', '₹12,400', '18', '₹350', '₹1,200.50', '₹2,100', '₹9,449.50',
       'Karkala ₹8,200 (11) · Moodbidri ₹4,200 (7)',
     ]);
+  });
+});
+
+describe('report times you can set', () => {
+  const on = { daily: true, weekly: true, monthly: true };
+  const keys = (iso: string, times: object) => dueReports(ist(iso), { ...on, times }).map((d) => d.key);
+
+  it('uses the standard schedule when nothing is set, and repairs anything invalid', () => {
+    expect(cleanTimes(undefined)).toEqual(DEFAULT_TIMES);
+    expect(cleanTimes({ dailyTime: '25:99', weeklyDay: 9, weeklyTime: 'noon', monthlyDay: 31, monthlyTime: '7:5' })).toEqual(DEFAULT_TIMES);
+    expect(cleanTimes({ dailyTime: '08:15', weeklyDay: 0, monthlyDay: 28 })).toMatchObject({ dailyTime: '08:15', weeklyDay: 0, monthlyDay: 28 });
+  });
+
+  it('sends the daily report from the chosen time', () => {
+    const t = { dailyTime: '19:00' };
+    expect(keys('2026-10-07T18:59', t)).toEqual([]);
+    expect(keys('2026-10-07T19:00', t)).toEqual(['daily:2026-10-07']);
+  });
+
+  it('sends the weekly report on the chosen day for the 7 days before it, with a next-day catch-up', () => {
+    // 9 Oct 2026 is a Friday (day 5)
+    const t = { weeklyDay: 5, weeklyTime: '18:00' };
+    expect(keys('2026-10-09T17:59', t).filter((k) => k.startsWith('weekly'))).toEqual([]);
+    const w = dueReports(ist('2026-10-09T18:00'), { ...on, times: t }).find((d) => d.kind === 'weekly')!;
+    expect([w.from, w.to]).toEqual(['2026-10-02', '2026-10-08']);
+    // Saturday catches up with the same week; Sunday does not
+    expect(keys('2026-10-10T10:00', t)).toContain('weekly:2026-10-02');
+    expect(keys('2026-10-11T10:00', t).filter((k) => k.startsWith('weekly'))).toEqual([]);
+    // Sunday as the chosen day (0): the catch-up day is Monday
+    const sun = dueReports(ist('2026-10-11T09:00'), { ...on, times: { weeklyDay: 0 } }).find((d) => d.kind === 'weekly')!;
+    expect([sun.from, sun.to]).toEqual(['2026-10-04', '2026-10-10']);
+    expect(dueReports(ist('2026-10-12T10:00'), { ...on, times: { weeklyDay: 0 } }).some((d) => d.key === 'weekly:2026-10-04')).toBe(true);
+  });
+
+  it('sends the monthly report on the chosen day for the month that just ended', () => {
+    const t = { monthlyDay: 5, monthlyTime: '10:30' };
+    expect(keys('2026-10-05T10:29', t).filter((k) => k.startsWith('monthly'))).toEqual([]);
+    const m = dueReports(ist('2026-10-05T10:30'), { ...on, times: t }).find((d) => d.kind === 'monthly')!;
+    expect([m.from, m.to]).toEqual(['2026-09-01', '2026-09-30']);
+    expect(keys('2026-10-06T08:00', t)).toContain('monthly:2026-09-01'); // next-day catch-up
+    expect(keys('2026-10-07T08:00', t).filter((k) => k.startsWith('monthly'))).toEqual([]);
+    expect(keys('2026-10-01T09:00', t).filter((k) => k.startsWith('monthly'))).toEqual([]); // the 1st is no longer the day
   });
 });
 
@@ -487,5 +531,32 @@ describe('offers', () => {
     await expect(make({ rows }).offers.send({ message: 'Valid offer text', imageUrl: 'https://x.test/a.webp', branchIds: [] })).rejects.toThrow(/JPG or PNG/);
     await expect(make({ rows }).offers.send({ message: 'Valid offer text', imageUrl: 'http://x.test/a.jpg', branchIds: [] })).rejects.toThrow(/JPG or PNG/);
     await expect(make({ rows: [] }).offers.send({ message: 'Valid offer text', branchIds: [] })).rejects.toThrow(/No one to send to/);
+  });
+});
+
+describe('grouping repeated lines', () => {
+  it('turns the same service into one line with a quantity, keeping a free one apart', () => {
+    expect(groupLines([{ name: 'Haircut', price: 150 }, { name: 'Haircut', price: 150 }, { name: 'Haircut', price: 0 }, { name: 'Beard', price: 99.99 }, { name: 'Beard', price: 99.99 }])).toEqual([
+      { name: 'Haircut', price: 150, qty: 2, total: 300 },
+      { name: 'Haircut', price: 0, qty: 1, total: 0 },
+      { name: 'Beard', price: 99.99, qty: 2, total: 199.98 },
+    ]);
+    expect(withQty('Haircut', 1)).toBe('Haircut');
+    expect(withQty('Haircut', 3)).toBe('Haircut ×3');
+  });
+
+  it('puts the quantity and the combined price in the WhatsApp bill line', () => {
+    const params = buildBillParams({
+      id: 'aaaaaaaa-bbbb-cccc-dddd-0123456789ab',
+      customerName: 'Ravi',
+      paymentMode: 'CASH',
+      discountAmount: 0,
+      tipAmount: 0,
+      totalAmount: 550,
+      branch: { name: 'CAVE X' },
+      services: [{ serviceName: 'Haircut', price: 150 }, { serviceName: 'Haircut', price: 150 }, { serviceName: 'Haircut', price: 150 }, { serviceName: 'Beard Trim', price: 100 }],
+      products: [],
+    });
+    expect(params[2]).toBe('Haircut ×3 ₹450, Beard Trim ₹100');
   });
 });

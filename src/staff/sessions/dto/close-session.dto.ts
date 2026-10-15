@@ -8,6 +8,7 @@ import {
   Min,
   IsEnum,
   IsArray,
+  ArrayMaxSize,
   ValidateNested,
   MaxLength,
 } from 'class-validator';
@@ -82,6 +83,18 @@ export class CloseSessionProductItemDto {
   paymentMode?: PaymentMode;
 }
 
+/** A discount on one part of the bill: a percentage (0–100) or an amount in rupees. */
+export class DiscountInputDto {
+  @ApiProperty({ enum: DiscountType, example: DiscountType.PERCENTAGE })
+  @IsEnum(DiscountType, { message: 'Invalid discount type.' })
+  type: DiscountType;
+
+  @ApiProperty({ example: 10 })
+  @IsNumber({ maxDecimalPlaces: 2 }, { message: 'Discount value must be a number with up to 2 decimal places.' })
+  @Min(0, { message: 'Discount value must be non-negative.' })
+  value: number;
+}
+
 export class CloseSessionDto {
   @ApiPropertyOptional({
     description: "Customer's WhatsApp number to send the bill to when none was saved at check-in",
@@ -98,6 +111,8 @@ export class CloseSessionDto {
   })
   @IsOptional()
   @IsArray()
+  // The same service listed twice is a quantity of two (a customer paying for friends' haircuts too).
+  @ArrayMaxSize(200, { message: 'Too many services on one bill.' })
   @ValidateNested({ each: true })
   @Type(() => CloseSessionServiceItemDto)
   services?: CloseSessionServiceItemDto[];
@@ -118,9 +133,28 @@ export class CloseSessionDto {
   })
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(200, { message: 'Too many products on one bill.' })
   @ValidateNested({ each: true })
   @Type(() => CloseSessionProductItemDto)
   productSales?: CloseSessionProductItemDto[];
+
+  @ApiPropertyOptional({
+    type: DiscountInputDto,
+    description: 'Discount on the services (percentage or rupees). With productDiscount, replaces discountType/discountValue.',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DiscountInputDto)
+  serviceDiscount?: DiscountInputDto;
+
+  @ApiPropertyOptional({
+    type: DiscountInputDto,
+    description: 'Discount on the products total (percentage or rupees).',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DiscountInputDto)
+  productDiscount?: DiscountInputDto;
 
   @ApiPropertyOptional({
     enum: DiscountType,

@@ -8,7 +8,7 @@ import { ReportExport } from './report-export.js';
 import { XLSX_MIME } from './report-xlsx.js';
 import type { TemplateHeader } from './whatsapp.client.js';
 import { WhatsappOutbox } from './whatsapp.outbox.js';
-import { ReportSettings, WhatsappSettings } from './whatsapp.settings.js';
+import { cleanTimes, ReportSettings, ReportTimes, toMinutes, WhatsappSettings } from './whatsapp.settings.js';
 import { buildReportParams, Digest } from './whatsapp.format.js';
 import { reportRange } from './report-export.js';
 
@@ -27,13 +27,19 @@ export interface DueReport {
 }
 
 /**
- * Which reports are due at `now` (IST):
- *  · daily: from 9:30 PM, for today
- *  · weekly: Monday from 9:00 AM, for the week that just ended (Mon–Sun); Tuesday catches up if missed
- *  · monthly: the 1st from 9:00 AM, for the month that just ended; the 2nd catches up if missed
+ * Which reports are due at `now` (IST), at the times set in Admin → Settings (standard: daily from 9:30 PM,
+ * weekly Monday from 9:00 AM, monthly the 1st from 9:00 AM):
+ *  · daily: from the daily time, for today
+ *  · weekly: on the chosen weekday, for the 7 days before it (Monday gives the week that just ended, Mon–Sun);
+ *    the next day catches up if the server was down
+ *  · monthly: on the chosen day, for the calendar month that just ended; the next day catches up if missed
  * Whether one was already sent is decided by the outbox's dedupe keys, so calling this often is harmless.
  */
-export function dueReports(now: Date, on: Pick<ReportSettings, 'daily' | 'weekly' | 'monthly'>): DueReport[] {
+export function dueReports(
+  now: Date,
+  on: Pick<ReportSettings, 'daily' | 'weekly' | 'monthly'> & { times?: Partial<ReportTimes> },
+): DueReport[] {
+  const t = cleanTimes(on.times);
   const ist = new Date(now.getTime() + IST_OFFSET_MS);
   const minutes = ist.getUTCHours() * 60 + ist.getUTCMinutes();
   const dow = ist.getUTCDay(); // 0 = Sunday
@@ -41,16 +47,16 @@ export function dueReports(now: Date, on: Pick<ReportSettings, 'daily' | 'weekly
   const today = dayKey(now);
   const due: DueReport[] = [];
 
-  if (on.daily && minutes >= 21 * 60 + 30) {
+  if (on.daily && minutes >= toMinutes(t.dailyTime)) {
     due.push({ kind: 'daily', key: `daily:${today}`, label: 'Daily', from: today, to: today });
   }
-  if (on.weekly && ((dow === 1 && minutes >= 9 * 60) || dow === 2)) {
-    const thisMonday = addDaysToKey(today, -((dow + 6) % 7));
-    const from = addDaysToKey(thisMonday, -7);
-    const to = addDaysToKey(thisMonday, -1);
+  if (on.weekly && ((dow === t.weeklyDay && minutes >= toMinutes(t.weeklyTime)) || dow === (t.weeklyDay + 1) % 7)) {
+    const scheduled = dow === t.weeklyDay ? today : addDaysToKey(today, -1);
+    const to = addDaysToKey(scheduled, -1);
+    const from = addDaysToKey(to, -6);
     due.push({ kind: 'weekly', key: `weekly:${from}`, label: 'Weekly', from, to });
   }
-  if (on.monthly && ((dom === 1 && minutes >= 9 * 60) || dom === 2)) {
+  if (on.monthly && ((dom === t.monthlyDay && minutes >= toMinutes(t.monthlyTime)) || dom === t.monthlyDay + 1)) {
     const firstOfThisMonth = `${today.slice(0, 8)}01`;
     const to = addDaysToKey(firstOfThisMonth, -1);
     const from = `${to.slice(0, 8)}01`;

@@ -144,4 +144,22 @@ describe('formatMinutes', () => {
     expect(formatMinutes(45)).toBe('45m');
     expect(formatMinutes(308)).toBe('5h 8m');
   });
+
+  it('splits revenue exactly when the bill recorded the product discount apart from the service discount', () => {
+    const bill = {
+      id: 'x', branchId: 'b', stylistId: null, customerId: null, customerName: 'A', customerMobile: null, paymentMode: 'CASH',
+      subtotal: 1500, discountAmount: 50, productDiscountAmount: 50, serviceDiscountAmount: 0, tipAmount: 0, totalAmount: 1450,
+      startedAt: null, createdAt: new Date(), closedAt: new Date(), isEdited: false,
+      services: [{ serviceName: 'Haircut', price: 1000 }],
+      products: [{ price: 500, paymentMode: 'CASH' }],
+    } as any;
+    const f = aggregateFinance([bill], [], []);
+    expect(f.revenue).toBe(1450);
+    expect(f.productSales).toBe(450); // the whole ₹50 came off the products
+    expect(f.serviceRevenue).toBe(1000);
+    // the same bill without the split is shared in proportion (the older bills)
+    const old = aggregateFinance([{ ...bill, productDiscountAmount: 0, serviceDiscountAmount: 0 }], [], []);
+    expect(old.productSales).toBeCloseTo(483.33, 2);
+    expect(old.revenue).toBe(1450);
+  });
 });

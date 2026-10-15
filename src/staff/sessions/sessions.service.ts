@@ -12,6 +12,7 @@ import { CreateSessionDto } from './dto/create-session.dto.js';
 import { CloseSessionDto } from './dto/close-session.dto.js';
 import { AssignStylistDto } from './dto/assign-stylist.dto.js';
 import { freeHaircutIndex, isFreeVisitNext } from '../../common/loyalty.js';
+import { BillDiscount, billDiscount, wholeBillDiscount } from '../../common/discount.js';
 import { WhatsappService } from '../../whatsapp/whatsapp.service.js';
 
 /** Another request closed this bill first. */
@@ -141,6 +142,12 @@ export class SessionsService {
       discountType: session.discountType,
       discountValue: Number(session.discountValue),
       discountAmount: Number(session.discountAmount),
+      serviceDiscountType: session.serviceDiscountType ?? DiscountType.NONE,
+      serviceDiscountValue: Number(session.serviceDiscountValue ?? 0),
+      serviceDiscountAmount: Number(session.serviceDiscountAmount ?? 0),
+      productDiscountType: session.productDiscountType ?? DiscountType.NONE,
+      productDiscountValue: Number(session.productDiscountValue ?? 0),
+      productDiscountAmount: Number(session.productDiscountAmount ?? 0),
       tipAmount: Number(session.tipAmount),
       totalAmount: Number(session.totalAmount),
       paymentMode: session.paymentMode ?? null,
@@ -496,6 +503,18 @@ export class SessionsService {
     return this.formatSessionOutput(session);
   }
 
+  /** The six columns that keep the service discount and the product discount apart. */
+  private discountColumns(d: BillDiscount) {
+    return {
+      serviceDiscountType: d.services.type,
+      serviceDiscountValue: d.services.value,
+      serviceDiscountAmount: d.services.amount,
+      productDiscountType: d.products.type,
+      productDiscountValue: d.products.value,
+      productDiscountAmount: d.products.amount,
+    };
+  }
+
   /** Validates the bill lines against branch pricing and computes all totals. */
   private async computeBilling(branchId: string, dto: CloseSessionDto, freeVisit = false) {
     const hasServices = dto.services && dto.services.length > 0;
@@ -613,36 +632,17 @@ export class SessionsService {
     );
     const preDiscountSubtotal = this.round2(servicesSubtotal + productsSubtotal);
 
-    // Discount calculations
-    const discountType = dto.discountType || DiscountType.NONE;
-    const rawDiscountValue = dto.discountValue ?? 0;
-    let discountValue = 0;
-    let discountAmount = 0;
-
-    if (discountType === DiscountType.PERCENTAGE) {
-      if (rawDiscountValue < 0 || rawDiscountValue > 100) {
-        throw new BadRequestException('Percentage discount must be between 0 and 100.');
-      }
-      discountValue = rawDiscountValue;
-      discountAmount = this.round2((preDiscountSubtotal * discountValue) / 100);
-    } else if (discountType === DiscountType.FIXED) {
-      if (rawDiscountValue < 0) {
-        throw new BadRequestException('Fixed discount amount must be non-negative.');
-      }
-      if (rawDiscountValue > preDiscountSubtotal) {
-        throw new BadRequestException(
-          'Fixed discount amount cannot exceed pre-discount subtotal.',
-        );
-      }
-      discountValue = rawDiscountValue;
-      discountAmount = this.round2(discountValue);
-    }
-
-    if (discountAmount > preDiscountSubtotal) {
-      throw new BadRequestException(
-        'Discount amount cannot exceed pre-discount subtotal.',
-      );
-    }
+    // Discount: a separate one on the services and on the products (what the billing screen sends), or one
+    // whole-bill discount from older screens, split between the two in proportion.
+    const servicesSub = this.round2(servicesSubtotal);
+    const productsSub = this.round2(productsSubtotal);
+    const discount =
+      dto.serviceDiscount || dto.productDiscount
+        ? billDiscount({ services: dto.serviceDiscount, products: dto.productDiscount }, servicesSub, productsSub)
+        : wholeBillDiscount(dto.discountType || DiscountType.NONE, dto.discountValue ?? 0, servicesSub, productsSub);
+    const discountType = discount.summary.type;
+    const discountValue = discount.summary.value;
+    const discountAmount = discount.total;
 
     const tipAmount = this.round2(dto.tipAmount ?? 0);
     const afterDiscountSubtotal = this.round2(preDiscountSubtotal - discountAmount);
@@ -656,6 +656,7 @@ export class SessionsService {
       discountType,
       discountValue,
       discountAmount,
+      discountParts: discount,
       tipAmount,
       totalAmount,
     };
@@ -714,6 +715,7 @@ export class SessionsService {
         discountType,
         discountValue,
         discountAmount,
+        discountParts,
         tipAmount,
         totalAmount,
       } = await this.computeBilling(branchId, dto, freeVisit);
@@ -732,6 +734,7 @@ export class SessionsService {
               discountType,
               discountValue,
               discountAmount,
+              ...this.discountColumns(discountParts),
               tipAmount,
               totalAmount,
               paymentMode: dto.paymentMode,
@@ -887,6 +890,7 @@ export class SessionsService {
           discountType: billing.discountType,
           discountValue: billing.discountValue,
           discountAmount: billing.discountAmount,
+          ...this.discountColumns(billing.discountParts),
           tipAmount: billing.tipAmount,
           totalAmount: billing.totalAmount,
           paymentMode: dto.paymentMode,

@@ -3,6 +3,40 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { toWhatsappNumber } from './whatsapp.format.js';
 
+/** When the scheduled reports go out (Indian time). */
+export interface ReportTimes {
+  /** "HH:MM", 24-hour. The daily report is for that day, sent from this time. */
+  dailyTime: string;
+  /** 0 = Sunday … 6 = Saturday. The weekly report covers the 7 days before that day. */
+  weeklyDay: number;
+  weeklyTime: string;
+  /** 1–28. The monthly report is for the month before, sent from this day. */
+  monthlyDay: number;
+  monthlyTime: string;
+}
+
+export const DEFAULT_TIMES: ReportTimes = { dailyTime: '21:30', weeklyDay: 1, weeklyTime: '09:00', monthlyDay: 1, monthlyTime: '09:00' };
+
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/** The saved or submitted times, with anything missing or invalid replaced by the standard schedule. */
+export function cleanTimes(v?: Partial<ReportTimes> | null): ReportTimes {
+  const time = (x: unknown, fallback: string) => (typeof x === 'string' && HHMM.test(x) ? x : fallback);
+  const int = (x: unknown, lo: number, hi: number, fallback: number) => {
+    const n = Number(x);
+    return Number.isInteger(n) && n >= lo && n <= hi ? n : fallback;
+  };
+  return {
+    dailyTime: time(v?.dailyTime, DEFAULT_TIMES.dailyTime),
+    weeklyDay: int(v?.weeklyDay, 0, 6, DEFAULT_TIMES.weeklyDay),
+    weeklyTime: time(v?.weeklyTime, DEFAULT_TIMES.weeklyTime),
+    monthlyDay: int(v?.monthlyDay, 1, 28, DEFAULT_TIMES.monthlyDay),
+    monthlyTime: time(v?.monthlyTime, DEFAULT_TIMES.monthlyTime),
+  };
+}
+
+export const toMinutes = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+
 export interface ReportSettings {
   /** WhatsApp numbers (country code + number) that receive the reports. */
   phones: string[];
@@ -11,6 +45,7 @@ export interface ReportSettings {
   monthly: boolean;
   /** Send the full Excel report with the message (needs the cave_report_file template). */
   excel: boolean;
+  times: ReportTimes;
 }
 
 const KEY = 'whatsapp.reports';
@@ -90,13 +125,14 @@ export class WhatsappSettings {
         weekly: v.weekly !== false,
         monthly: v.monthly !== false,
         excel: v.excel !== false,
+        times: cleanTimes(v.times),
       };
     }
     const fromEnv = (this.config.get<string>('ADMIN_WHATSAPP') ?? '')
       .split(',')
       .map((p) => toWhatsappNumber(p))
       .filter((p): p is string => !!p);
-    return { phones: fromEnv, daily: true, weekly: true, monthly: true, excel: true };
+    return { phones: fromEnv, daily: true, weekly: true, monthly: true, excel: true, times: DEFAULT_TIMES };
   }
 
   async save(settings: ReportSettings): Promise<ReportSettings> {

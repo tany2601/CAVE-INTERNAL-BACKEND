@@ -207,6 +207,39 @@ The webhook cannot be tested from your laptop (Meta needs a public address); do 
 - [ ] The two admin numbers are added under *Send reports to* and each has received a test report.
 - [ ] Customers are told at check-in that bills (and, if you send them, offers) come on WhatsApp.
 
+## Going live with the client's existing WhatsApp Business number
+
+The client already uses a number in the **WhatsApp Business app** and wants to keep using it there while the
+software sends bills and reports from the same number. Meta calls this **coexistence**. Do not use the normal
+"register a number" flow for this: completing it for a number that is active in the app can move the number
+off the app. Check Meta's current documentation (WhatsApp Cloud API → *Coexistence* / *Embedded Signup*) for the
+exact steps and eligibility (app version, how long the number has been active, supported country); they change.
+
+Who does what:
+
+| Step | Who | Notes |
+| --- | --- | --- |
+| 1. Business verification (Meta Business Settings → Security centre) | Client owner | Raises the daily message limit; start early, it takes days |
+| 2. Add the number to the WhatsApp Business Account through Meta's coexistence flow (the client scans a QR code in their Business app) | Client owner, on their phone | Not completing a verification-code registration of the number |
+| 3. Payment method in WhatsApp Manager → Billing | Client owner | Template messages are charged |
+| 4. **Re-submit every template in the production WhatsApp account** (`cave_bill`, `cave_bill_image`, `cave_report`, `cave_report_file`, later the offer ones) with the same text as here | You | Approved templates in the *test* account do not exist in the production one |
+| 5. System User token with `whatsapp_business_messaging` + `whatsapp_business_management`, with the production account assigned to it | You | Never expires |
+| 6. Set the server `.env` (below), restart, press **Resume** if paused | You | |
+| 7. Webhook (callback URL, verify token, app secret, subscribe to **messages**) | You | See "Webhook" above |
+| 8. Switch the app to **Automatic** in Admin → Settings → WhatsApp, add the two admin numbers, send a test report and one real bill | You | Start with your own number |
+
+Server `.env` for production (values come from Meta; never paste them in chat or commit them):
+
+```
+WHATSAPP_TOKEN=<system user token>
+WHATSAPP_PHONE_NUMBER_ID=<the production number's id (WhatsApp Manager → Phone numbers)>
+WHATSAPP_API_VERSION=v25.0
+WHATSAPP_TEMPLATE_LANG=en
+WHATSAPP_APP_SECRET=<Meta app → Settings → Basic → App secret>
+WHATSAPP_VERIFY_TOKEN=<a long random string: openssl rand -hex 24>
+DB_POOL_MAX=8
+```
+
 ## Good to know
 
 - **Cost.** Meta charges per conversation (Utility templates, India: roughly ₹0.15–0.80 each, with a

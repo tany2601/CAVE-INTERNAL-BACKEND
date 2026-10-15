@@ -1,3 +1,4 @@
+import { inferCategory } from '../../common/menu-order.js';
 import {
   Injectable,
   ConflictException,
@@ -25,7 +26,8 @@ export class AdminServicesService {
       data: {
         name: dto.name,
         description: dto.description ?? null,
-        category: dto.category ?? null,
+        // The admin doesn't pick a category: the menu order comes from the name (Hair, Beard, Skin, Combo).
+        category: dto.category ?? inferCategory(dto.name),
         durationMin: dto.durationMin ?? null,
         isActive: true,
       },

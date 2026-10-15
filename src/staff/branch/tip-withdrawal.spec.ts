@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { BadRequestException } from '@nestjs/common';
 import { BranchOpsService } from './branch.service.js';
 
@@ -37,6 +37,14 @@ const make = (tips: number, withdrawn: number) => {
 const mgr = { role: 'MANAGER', branchId: 'b1' };
 
 describe('tip withdrawal', () => {
+  // The sessions are built as "N minutes ago", so pin the clock to midday (Indian time): otherwise the test fails
+  // in the first hour after midnight, when "50 minutes ago" is still yesterday.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-13T08:00:00Z'));
+  });
+  afterEach(() => vi.useRealTimers());
+
   it('withdraws everything that is left when no amount is given', async () => {
     const { prisma, service } = make(100, 30);
     const res = await service.createPayout(mgr, { userId: 'u1', kind: 'TIP_WITHDRAWAL', paymentMode: 'CASH' } as any);

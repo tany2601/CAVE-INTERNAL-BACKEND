@@ -86,6 +86,11 @@ export class AdminReportsService {
     return [b.address, b.city, b.state].filter(Boolean).join(', ') || 'No address added';
   }
 
+  /** "Karkala, Karnataka": just the city and state, for the small branch cards. */
+  private place(b: { city: string | null; state: string | null }) {
+    return [b.city, b.state].filter(Boolean).join(', ');
+  }
+
   private rangeOf(query: { period: ReportPeriod; from?: string; to?: string }) {
     return periodRange(query.period, new Date(), { from: query.from, to: query.to });
   }
@@ -181,6 +186,7 @@ export class AdminReportsService {
           id: b.id,
           name: b.name,
           location: this.location(b),
+          place: this.place(b),
           revenue: round2(mine.reduce((a, s) => a + n(s.totalAmount) - n(s.tipAmount), 0)),
           customers: mine.filter((s) => s.services.length > 0).length,
           active: activeByBranch.get(b.id) ?? 0,

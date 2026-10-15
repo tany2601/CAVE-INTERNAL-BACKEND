@@ -50,6 +50,8 @@ export class ReportExport {
           subtotal: true,
           discountType: true,
           discountAmount: true,
+          serviceDiscountAmount: true,
+          productDiscountAmount: true,
           tipAmount: true,
           totalAmount: true,
           startedAt: true,

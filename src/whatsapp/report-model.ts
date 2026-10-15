@@ -1,6 +1,7 @@
 import { PaymentMode } from '@prisma/client';
 import { computeCommission, round2 } from '../common/commission.util.js';
 import { addDaysToKey, dayKey, IST_OFFSET_MS } from '../common/time.util.js';
+import { groupLines, withQty } from './whatsapp.format.js';
 import { aggregateFinance, Finance, FinPayout, FinSession, FinTransaction } from '../admin/reports/finance.js';
 
 const n = (v: unknown) => Number(v ?? 0);
@@ -289,8 +290,12 @@ export function buildReportModel(input: ReportInput): ReportModel {
       customer: s.customerName,
       phone: tenDigits(s.customerMobile),
       stylist: s.stylist?.name ?? '',
-      services: s.services.map((l) => (n(l.price) === 0 ? `${l.serviceName} (FREE)` : l.serviceName)).join(', '),
-      products: s.products.map((p) => p.productName).join(', '),
+      services: groupLines(s.services.map((l) => ({ name: l.serviceName, price: n(l.price) })))
+        .map((l) => (l.price === 0 ? `${withQty(l.name, l.qty)} (FREE)` : withQty(l.name, l.qty)))
+        .join(', '),
+      products: groupLines(s.products.map((p) => ({ name: p.productName, price: n(p.price) })))
+        .map((p) => withQty(p.name, p.qty))
+        .join(', '),
       subtotal: money(s.subtotal),
       discount: money(s.discountAmount),
       tip: money(s.tipAmount),

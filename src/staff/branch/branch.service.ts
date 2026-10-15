@@ -22,6 +22,8 @@ import {
   SetOpeningBalanceDto,
 } from './dto/staff-ops.dto.js';
 import { computeCommission, round2 } from '../../common/commission.util.js';
+import { sortMenu } from '../../common/menu-order.js';
+import { toSetting } from '../../admin/discounts/discount-settings.js';
 import { isFreeVisitNext } from '../../common/loyalty.js';
 import {
   dayDate,
@@ -78,10 +80,10 @@ export class BranchOpsService {
     const pricing = await this.prisma.branchServicePricing.findMany({
       where: { branchId: branch.id, isActive: true, service: { isActive: true } },
       include: { service: true },
-      orderBy: { service: { name: 'asc' } },
     });
     return {
-      data: pricing.map((p) => ({
+      // Hair, Beard, Skin, Combo, then the rest; steady when a service is edited (see common/menu-order.ts)
+      data: sortMenu(pricing).map((p) => ({
         id: p.id, // servicePricingId, what /close expects
         serviceId: p.serviceId,
         name: p.service.name,
@@ -312,7 +314,7 @@ export class BranchOpsService {
 
     // Everything runs in one parallel batch (including the branch lookup): each database round trip
     // is ~100 ms away, so a chain of awaits here is what made sign-in feel slow.
-    const [branch, active, closed, expenses, payouts, dayRow, stats] = await Promise.all([
+    const [branch, active, closed, expenses, payouts, dayRow, stats, discountRow] = await Promise.all([
       this.resolveBranch(reqUser),
       this.prisma.session.findMany({
         relationLoadStrategy: 'join',
@@ -347,6 +349,8 @@ export class BranchOpsService {
         where: { branchId_date: { branchId: branchId, date: dayDate(key) } },
       }),
       this.buildStylistStats(branchId, since),
+      // The discount the admin set for this branch (Admin → Discounts)
+      this.prisma.branchDiscount?.findUnique({ where: { branchId } }) ?? null,
     ]);
 
     const paidBy = new Map<string, number>();
@@ -385,6 +389,8 @@ export class BranchOpsService {
       day: this.formatDay(dayRow),
       // How bills reach customers, so the staff app knows whether to offer a WhatsApp button.
       whatsapp: (await this.whatsappSettings?.getDelivery()) ?? { mode: 'off', billFormat: 'text' },
+      // The billing screen starts with this discount when the admin has switched it on.
+      discount: toSetting(discountRow),
     };
   }
 
