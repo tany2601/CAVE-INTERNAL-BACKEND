@@ -5,6 +5,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   ParseUUIDPipe,
   Post,
   Put,
@@ -14,7 +15,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { BranchOpsService } from './branch.service.js';
-import { CreateStaffExpenseDto } from './dto/create-staff-expense.dto.js';
+import { CreateStaffExpenseDto, UpdateStaffExpenseDto } from './dto/create-staff-expense.dto.js';
 import {
   CloseDayDto,
   BooksDateQueryDto,
@@ -72,6 +73,17 @@ export class BranchOpsController {
   @ApiOperation({ summary: 'Record a branch expense or employee advance' })
   createExpense(@Body() dto: CreateStaffExpenseDto, @Req() req: any) {
     return this.branchOps.createExpense(req.user, dto);
+  }
+
+  @Patch('expenses/:id')
+  @Roles('MANAGER')
+  @ApiOperation({ summary: "Correct one of today's expenses (description, amount or payment mode)" })
+  updateExpense(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateStaffExpenseDto,
+    @Req() req: any,
+  ) {
+    return this.branchOps.updateExpense(req.user, id, dto);
   }
 
   @Get('stats')

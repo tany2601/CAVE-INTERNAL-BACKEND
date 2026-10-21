@@ -15,7 +15,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { WhatsappSettings } from '../../whatsapp/whatsapp.settings.js';
 import { SessionsService } from '../sessions/sessions.service.js';
-import { CreateStaffExpenseDto } from './dto/create-staff-expense.dto.js';
+import { CreateStaffExpenseDto, UpdateStaffExpenseDto } from './dto/create-staff-expense.dto.js';
 import {
   CloseDayDto,
   CreatePayoutDto,
@@ -478,6 +478,47 @@ export class BranchOpsService {
       employeeId: tx.employeeId ?? null,
       addedBy: author.name,
       createdAt: tx.createdAt,
+    };
+  }
+
+  /** Correct a wrong entry. Only this branch's expenses from today, and only while today's books are open. */
+  async updateExpense(reqUser: any, id: string, dto: UpdateStaffExpenseDto) {
+    const branch = await this.resolveBranch(reqUser);
+    const tx = await this.prisma.branchTransaction.findUnique({
+      where: { id },
+      include: { createdBy: { select: { name: true } } },
+    });
+    if (
+      !tx ||
+      tx.branchId !== branch.id ||
+      (tx.type !== TransactionType.GENERAL_EXPENSE && tx.type !== TransactionType.EMPLOYEE_ADVANCE)
+    ) {
+      throw new NotFoundException('Expense not found.');
+    }
+    const key = dayKey();
+    if (tx.createdAt < dayStart(key)) {
+      throw new ConflictException("Only today's expenses can be edited.");
+    }
+    const books = await this.prisma.dailyBalance.findUnique({
+      where: { branchId_date: { branchId: branch.id, date: dayDate(key) } },
+    });
+    if (books?.closedAt) {
+      throw new ConflictException("Today's books are already closed.");
+    }
+    const data: { description?: string; amount?: number; paymentMode?: PaymentMode } = {};
+    if (dto.description !== undefined) data.description = dto.description;
+    if (dto.amount !== undefined) data.amount = dto.amount;
+    if (dto.paymentMode !== undefined) data.paymentMode = dto.paymentMode as PaymentMode;
+    const updated = await this.prisma.branchTransaction.update({ where: { id }, data });
+    return {
+      id: updated.id,
+      type: updated.type,
+      description: updated.description,
+      amount: Number(updated.amount),
+      paymentMode: updated.paymentMode,
+      employeeId: updated.employeeId ?? null,
+      addedBy: tx.createdBy.name,
+      createdAt: updated.createdAt,
     };
   }
 

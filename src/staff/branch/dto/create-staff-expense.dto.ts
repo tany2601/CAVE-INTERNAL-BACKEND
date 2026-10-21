@@ -43,3 +43,26 @@ export class CreateStaffExpenseDto {
   @IsUUID('4', { message: 'employeeId must be a valid UUID v4.' })
   employeeId?: string;
 }
+
+/** Fix a wrong entry: the description, amount or payment mode. The type and the employee stay as recorded. */
+export class UpdateStaffExpenseDto {
+  @ApiPropertyOptional({ example: 'Towels & supplies' })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty({ message: 'Description is required.' })
+  @MaxLength(200)
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  description?: string;
+
+  @ApiPropertyOptional({ example: 850 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 }, { message: 'Amount must be a number.' })
+  @Min(0.01, { message: 'Amount must be greater than zero.' })
+  amount?: number;
+
+  @ApiPropertyOptional({ enum: PaymentMode, example: 'CASH' })
+  @IsOptional()
+  @IsEnum(PaymentMode, { message: 'paymentMode must be CASH or GPAY.' })
+  paymentMode?: PaymentMode;
+}
