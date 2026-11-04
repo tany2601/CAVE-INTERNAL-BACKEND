@@ -55,13 +55,35 @@ Under it you choose how the bill looks:
    for them). `cave_bill` and `cave_report` are needed for Automatic; `cave_bill_image` only if you
    choose the picture format; the two `cave_offer…` ones only if you send offers.
 
-   **`cave_bill`**
+   **`cave_bill_v2`** (the bill as separate lines. WhatsApp does not allow a line break inside a variable, so every
+   part of the bill has its own variable and the template puts them on their own lines)
 
    ```
-   Hi {{1}}, thank you for visiting {{2}}! Your bill: {{3}}. Total paid: {{4}} ({{5}}). Bill no. {{6}}. We hope to see you again!
+   Hi {{1}}, thank you for visiting {{2}}!
+
+   Services: {{3}}
+   Products: {{4}}
+   Discount: {{5}}
+   GST on services: {{6}}
+   GST on products: {{7}}
+   Tip: {{8}}
+
+   Total paid: {{9}} ({{10}})
+   Invoice no.: {{11}}
+   GSTIN: {{12}}
+
+   Rate your visit: {{13}}
+
+   We hope to see you again!
    ```
 
-   Samples: `Ravi`, `CAVE Karkala`, `Haircut ₹150, Matte Clay ₹599, Tip ₹20`, `₹769`, `Cash`, `6789AB`
+   Samples: `Ravi`, `CAVE Karkala`, `Hair Spa ₹600, Beard Spa ₹300`, `Matte Clay ₹599`, `None`,
+   `CGST 2.5% ₹22.50, SGST 2.5% ₹22.50`, `CGST 9% ₹53.82, SGST 9% ₹53.82`, `None`, `₹1,494`, `GPay`,
+   `CV/26-27/000021`, `29AAOCC1889N1ZO`, `https://g.page/r/CkarkalaEAI/review`
+
+   The last variable is the branch's Google review link (set per branch in Admin → Branches). A branch with no link
+   yet shows "reply to this message with your feedback" there. A part with nothing in it shows `None`. Names ending in `_v2` switch the app to this layout; the older
+   single-paragraph `cave_bill` / `cave_bill_image` (variables 1 to 6) keep working if you leave them in `.env`.
 
    **`cave_report`** (category *Utility*, no header; the plain-text report, used when the Excel can't be attached)
 
@@ -102,13 +124,20 @@ Under it you choose how the bill looks:
    (same samples as `cave_report`). If this template is missing or the file cannot be made, the plain `cave_report`
    goes out instead.
 
-   **`cave_bill_image`** (category *Utility*, **Header: Image**; for the header sample upload `assets/sample-bill.png`. It is only an example for Meta's review: the real bill picture is generated and attached for every bill)
+   **`cave_bill_image_v2`** (category *Utility*, **Header: Image**; for the header sample upload `assets/sample-bill.png`. It is only an example for Meta's review: the real bill picture is generated and attached for every bill. The picture lists every item and the GST, so the text under it is short)
 
    ```
-   Hi {{1}}, thank you for visiting {{2}}! Your bill: {{3}}. Total paid: {{4}} ({{5}}). Bill no. {{6}}. We hope to see you again!
+   Hi {{1}}, thank you for visiting {{2}}! Your bill is in the picture above.
+
+   Total paid: {{3}} ({{4}})
+   Invoice no.: {{5}}
+
+   Rate your visit: {{6}}
+
+   We hope to see you again!
    ```
 
-   (same samples as `cave_bill`)
+   Samples: `Ravi`, `CAVE Karkala`, `₹1,494`, `GPay`, `CV/26-27/000021`, `https://g.page/r/CkarkalaEAI/review`
 
    **`cave_offer`** (category **Marketing**, no header). Add one **Quick reply** button with the text `Stop promotions`
    (WhatsApp recommends an opt-out on every marketing message; the app reads that button as STOP)
@@ -134,10 +163,10 @@ Under it you choose how the bill looks:
    WHATSAPP_TOKEN=<the permanent token>
    WHATSAPP_PHONE_NUMBER_ID=<the phone number id>
    # only if you named the templates differently:
-   # WHATSAPP_BILL_TEMPLATE=cave_bill
+   # WHATSAPP_BILL_TEMPLATE=cave_bill_v2
    # WHATSAPP_REPORT_TEMPLATE=cave_report
    # WHATSAPP_REPORT_FILE_TEMPLATE=cave_report_file
-   # WHATSAPP_BILL_IMAGE_TEMPLATE=cave_bill_image
+   # WHATSAPP_BILL_IMAGE_TEMPLATE=cave_bill_image_v2
    # WHATSAPP_OFFER_TEMPLATE=cave_offer
    # WHATSAPP_OFFER_IMAGE_TEMPLATE=cave_offer_image
    # WHATSAPP_TEMPLATE_LANG=en
@@ -146,6 +175,24 @@ Under it you choose how the bill looks:
 6. **Choose the mode and report numbers.** Admin → Settings → WhatsApp: pick **Automatic**, the bill
    format, up to 3 report numbers and which reports to send, **Save**, then press **Send a test report
    now**. It should arrive within seconds.
+
+## Getting each branch's Google review link
+
+Every branch needs its own **Google Business Profile** (the listing that shows on Google Maps). Then, for each branch:
+
+1. Sign in to Google with the account that manages that branch's profile and search Google for the branch's
+   name (or open **business.google.com**). The profile's card appears at the top.
+2. Tap **Ask for reviews** (also called **Get more reviews** / **Share review form**). Google shows a short link that
+   looks like `https://g.page/r/Cxxxxxxxxxxxx/review`. Copy it.
+3. Open the link on your phone once to check it opens the "Write a review" box for the right branch.
+4. In the app: **Admin → Branches → Modify** that branch, paste it in **Google review link**, and save.
+
+No Business Profile card (you are not the manager yet)? Use the Place ID instead: open Google's *Place ID Finder*
+(search "Google Place ID Finder"), search the branch's name and address, copy its Place ID (starts with `ChIJ`),
+and use `https://search.google.com/local/writereview?placeid=<PLACE ID>`.
+
+The link is printed at the bottom of that branch's WhatsApp bill. The app accepts only https links from Google
+(`g.page`, `goo.gl`, `search.google.com`, `google.com`), so a typo cannot put another website on a bill.
 
 ## Checking a report yourself (Admin → Settings → WhatsApp → Try a report)
 
@@ -196,7 +243,7 @@ The webhook cannot be tested from your laptop (Meta needs a public address); do 
 
 ## Going live checklist
 
-- [ ] All five templates show **Active** in WhatsApp Manager (`cave_bill`, `cave_bill_image`, `cave_report`,
+- [ ] All five templates show **Active** in WhatsApp Manager (`cave_bill_v2`, `cave_bill_image_v2`, `cave_report`,
       `cave_report_file`, `cave_offer`, `cave_offer_image`; the two offer ones only if you send offers).
 - [ ] A **permanent** token from a *System User* (Business Settings → Users → System users → Generate token, with
       `whatsapp_business_messaging` and `whatsapp_business_management`). The test token expires in 24 hours.

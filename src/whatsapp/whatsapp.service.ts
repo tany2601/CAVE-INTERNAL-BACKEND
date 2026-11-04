@@ -5,12 +5,12 @@ import { WhatsappSettings } from './whatsapp.settings.js';
 import { BillImageData, renderBillPng } from './bill-image.js';
 import { WhatsappClient } from './whatsapp.client.js';
 import { WhatsappOutbox } from './whatsapp.outbox.js';
-import { branchAddress, buildBillParams, toWhatsappNumber } from './whatsapp.format.js';
+import { branchAddress, buildBillImageParamsV2, buildBillParams, buildBillParamsV2, toWhatsappNumber, usesLineLayout } from './whatsapp.format.js';
 import { GST_STATE_NAMES } from '../common/gst.js';
 import { GstSettings } from '../common/gst-settings.service.js';
 
 /** What a bill needs to know about its branch: the name, and the address printed on a tax invoice. */
-const BRANCH_FOR_BILL = { name: true, address: true, city: true, state: true, phone: true } as const;
+const BRANCH_FOR_BILL = { name: true, address: true, city: true, state: true, phone: true, reviewUrl: true } as const;
 
 @Injectable()
 export class WhatsappService {
@@ -46,9 +46,10 @@ export class WhatsappService {
         kind: WhatsappKind.BILL,
         dedupeKey: `bill:${session.id}`,
         to,
-        params: buildBillParams(session),
         sessionId: session.id,
       };
+      const textParams = usesLineLayout(this.client.templates.bill) ? buildBillParamsV2(session) : buildBillParams(session);
+      const imageParams = usesLineLayout(this.client.templates.billImage) ? buildBillImageParamsV2(session) : buildBillParams(session);
       // The picture is made and uploaded now; if either step fails the customer still gets the text bill.
       let header: { id: string } | undefined;
       if (billFormat === 'image') {
@@ -61,6 +62,7 @@ export class WhatsappService {
       await this.outbox.enqueue({
         ...base,
         template: header ? this.client.templates.billImage : this.client.templates.bill,
+        params: header ? imageParams : textParams,
         header,
       });
     } catch (e) {

@@ -33,9 +33,9 @@ export class WhatsappClient {
 
   get templates() {
     return {
-      bill: this.config.get<string>('WHATSAPP_BILL_TEMPLATE') || 'cave_bill',
+      bill: this.config.get<string>('WHATSAPP_BILL_TEMPLATE') || 'cave_bill_v2',
       report: this.config.get<string>('WHATSAPP_REPORT_TEMPLATE') || 'cave_report',
-      billImage: this.config.get<string>('WHATSAPP_BILL_IMAGE_TEMPLATE') || 'cave_bill_image',
+      billImage: this.config.get<string>('WHATSAPP_BILL_IMAGE_TEMPLATE') || 'cave_bill_image_v2',
       offer: this.config.get<string>('WHATSAPP_OFFER_TEMPLATE') || 'cave_offer',
       offerImage: this.config.get<string>('WHATSAPP_OFFER_IMAGE_TEMPLATE') || 'cave_offer_image',
       reportFile: this.config.get<string>('WHATSAPP_REPORT_FILE_TEMPLATE') || 'cave_report_file',

@@ -66,7 +66,7 @@ export interface BillSession {
   discountAmount: unknown;
   tipAmount: unknown;
   totalAmount: unknown;
-  branch?: { name: string } | null;
+  branch?: { name: string; reviewUrl?: string | null } | null;
   services: { serviceName: string; price: unknown }[];
   products: { productName: string; price: unknown }[];
   /** Set on a GST tax invoice (see Session in the schema). */
@@ -120,6 +120,64 @@ export function buildBillParams(s: BillSession): string[] {
     cleanParam(inr(num(s.totalAmount)), 20),
     s.paymentMode === 'GPAY' ? 'GPay' : 'Cash',
     s.invoiceNumber ?? billNumber(s.id),
+  ];
+}
+
+/** Names that end in _v2, _v3 … use the line-by-line layout below; older template names keep the single-paragraph layout. */
+export const usesLineLayout = (templateName: string): boolean => /_v\d+$/i.test(templateName);
+
+/** What the review line says when a branch has no review link yet (the variable can't be empty). */
+const NO_REVIEW_LINK = 'reply to this message with your feedback';
+const reviewLine = (b?: { reviewUrl?: string | null } | null): string => cleanParam(b?.reviewUrl?.trim() || NO_REVIEW_LINK, 300);
+
+const joinLines = (lines: { name: string; price: number }[]): string =>
+  lines.length
+    ? groupLines(lines)
+        .map((x) => `${withQty(x.name, x.qty)} ${priceLabel(x.total)}`)
+        .join(', ')
+    : 'None';
+
+/**
+ * Body variables for the `cave_bill_v2` template. WhatsApp does not allow line breaks inside a variable, so each
+ * part of the bill has its own variable and the template puts them on separate lines:
+ *  1 customer · 2 branch · 3 services · 4 products · 5 discount · 6 GST on services · 7 GST on products · 8 tip ·
+ *  9 total · 10 paid by · 11 invoice / bill no. · 12 GSTIN · 13 the branch's Google review link
+ */
+export function buildBillParamsV2(s: BillSession): string[] {
+  const taxLine = (rate: unknown, cgst: unknown, sgst: unknown) =>
+    num(cgst) > 0 || num(sgst) > 0
+      ? `CGST ${halfRate(num(rate))}% ${inr(num(cgst))}, SGST ${halfRate(num(rate))}% ${inr(num(sgst))}`
+      : 'None';
+  const gst = !!s.invoiceNumber;
+  return [
+    isWalkInName(s.customerName) ? 'there' : cleanParam(s.customerName, 60),
+    cleanParam(s.branch?.name ?? 'CAVE', 60),
+    cleanParam(joinLines(s.services.map((x) => ({ name: x.serviceName, price: num(x.price) }))), 400),
+    cleanParam(joinLines(s.products.map((x) => ({ name: x.productName, price: num(x.price) }))), 400),
+    num(s.discountAmount) > 0 ? `-${inr(num(s.discountAmount))}` : 'None',
+    gst ? taxLine(s.gstServicesRate, s.gstServicesCgst, s.gstServicesSgst) : 'None',
+    gst ? taxLine(s.gstProductsRate, s.gstProductsCgst, s.gstProductsSgst) : 'None',
+    num(s.tipAmount) > 0 ? inr(num(s.tipAmount)) : 'None',
+    cleanParam(inr(num(s.totalAmount)), 20),
+    s.paymentMode === 'GPAY' ? 'GPay' : 'Cash',
+    s.invoiceNumber ?? billNumber(s.id),
+    s.gstin ?? 'Not applicable',
+    reviewLine(s.branch),
+  ];
+}
+
+/**
+ * Body variables for the `cave_bill_image_v2` template. The picture above the message carries every line, so the
+ * caption is short: 1 customer · 2 branch · 3 total · 4 paid by · 5 invoice / bill no. · 6 the branch's review link
+ */
+export function buildBillImageParamsV2(s: BillSession): string[] {
+  return [
+    isWalkInName(s.customerName) ? 'there' : cleanParam(s.customerName, 60),
+    cleanParam(s.branch?.name ?? 'CAVE', 60),
+    cleanParam(inr(num(s.totalAmount)), 20),
+    s.paymentMode === 'GPAY' ? 'GPay' : 'Cash',
+    s.invoiceNumber ?? billNumber(s.id),
+    reviewLine(s.branch),
   ];
 }
 

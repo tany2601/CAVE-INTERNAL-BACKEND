@@ -31,6 +31,8 @@ model Branch {
   state         String?
   phone         String?
   imageUrl      String?
+  /// Where this branch's customers leave a Google review; printed at the bottom of its WhatsApp bills.
+  reviewUrl     String?
   // Revenue goal for the month, shown on admin branch cards.
   monthlyTarget Float           @default(0)
   managerId     String?

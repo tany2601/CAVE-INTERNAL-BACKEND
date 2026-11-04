@@ -387,6 +387,8 @@ export class BranchOpsService {
         city: branch.city ?? null,
         state: branch.state ?? null,
         phone: branch.phone ?? null,
+        // Printed at the bottom of the bill so customers can rate the visit
+        reviewUrl: branch.reviewUrl ?? null,
       },
       stylists: stats.map((s) => ({
         ...s,

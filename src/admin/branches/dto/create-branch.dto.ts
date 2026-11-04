@@ -7,6 +7,7 @@ import {
   IsString,
   IsUUID,
   Matches,
+  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -65,6 +66,18 @@ export class CreateBranchDto {
   @IsString({ message: 'Phone must be a string.' })
   @Matches(/^[6-9]\d{9}$/, { message: 'Phone must be a valid 10-digit mobile number.' })
   phone?: string;
+
+  @ApiPropertyOptional({
+    example: 'https://g.page/r/CxxxxxxxxxxxxEAI/review',
+    description: "The branch's Google review link, printed at the bottom of its WhatsApp bills. null clears it.",
+  })
+  @IsOptional()
+  @IsString({ message: 'The review link must be text.' })
+  @MaxLength(300, { message: 'That review link is too long.' })
+  @Matches(/^https:\/\/(g\.page|g\.co|goo\.gl|maps\.app\.goo\.gl|share\.google|(?:[a-z0-9-]+\.)*google\.(?:com|co\.in|in))(\/|$)/i, {
+    message: 'Paste the Google review link. It starts with https://g.page/… or https://search.google.com/…',
+  })
+  reviewUrl?: string | null;
 
   @ApiPropertyOptional({ description: 'Public URL of the branch image' })
   @IsOptional()

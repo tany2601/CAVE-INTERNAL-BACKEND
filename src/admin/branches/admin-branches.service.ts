@@ -167,6 +167,7 @@ export class AdminBranchesService {
         city: dto.city ?? null,
         state: dto.state ?? null,
         phone: dto.phone ?? null,
+        reviewUrl: dto.reviewUrl?.trim() || null,
         imageUrl: dto.imageUrl ?? null,
         monthlyTarget: dto.monthlyTarget ?? 0,
         isActive: true,
@@ -189,6 +190,7 @@ export class AdminBranchesService {
         city: branch.city,
         state: branch.state,
         phone: branch.phone,
+        reviewUrl: branch.reviewUrl,
         imageUrl: branch.imageUrl,
         monthlyTarget: branch.monthlyTarget,
         managerId: branch.managerId,
@@ -230,6 +232,7 @@ export class AdminBranchesService {
           city: true,
           state: true,
           phone: true,
+        reviewUrl: true,
           imageUrl: true,
           monthlyTarget: true,
           managerId: true,
@@ -270,6 +273,7 @@ export class AdminBranchesService {
         city: true,
         state: true,
         phone: true,
+        reviewUrl: true,
         imageUrl: true,
         monthlyTarget: true,
         managerId: true,
@@ -326,6 +330,7 @@ export class AdminBranchesService {
     if (dto.city !== undefined) updateData.city = dto.city;
     if (dto.state !== undefined) updateData.state = dto.state;
     if (dto.phone !== undefined) updateData.phone = dto.phone;
+    if (dto.reviewUrl !== undefined) updateData.reviewUrl = dto.reviewUrl ? dto.reviewUrl.trim() : null;
     if (dto.imageUrl !== undefined) updateData.imageUrl = dto.imageUrl;
     if (dto.monthlyTarget !== undefined) updateData.monthlyTarget = dto.monthlyTarget;
     if (dto.managerId !== undefined) {
@@ -357,6 +362,7 @@ export class AdminBranchesService {
         city: true,
         state: true,
         phone: true,
+        reviewUrl: true,
         imageUrl: true,
         monthlyTarget: true,
         managerId: true,
@@ -384,6 +390,7 @@ export class AdminBranchesService {
         city: true,
         state: true,
         phone: true,
+        reviewUrl: true,
         imageUrl: true,
         monthlyTarget: true,
         managerId: true,
@@ -415,6 +422,7 @@ export class AdminBranchesService {
         city: true,
         state: true,
         phone: true,
+        reviewUrl: true,
         imageUrl: true,
         monthlyTarget: true,
         managerId: true,
