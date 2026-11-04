@@ -2,12 +2,14 @@ import { PaymentMode } from '@prisma/client';
 import { computeCommission, round2 } from '../common/commission.util.js';
 import { addDaysToKey, dayKey, IST_OFFSET_MS } from '../common/time.util.js';
 import { groupLines, withQty } from './whatsapp.format.js';
-import { aggregateFinance, Finance, FinPayout, FinSession, FinTransaction } from '../admin/reports/finance.js';
+import { aggregateFinance, Finance, netSales, FinPayout, FinSession, FinTransaction } from '../admin/reports/finance.js';
 
 const n = (v: unknown) => Number(v ?? 0);
 
 /** What the report needs to know about one billed session (see ReportExport for how it is loaded). */
 export interface ReportSession extends FinSession {
+  invoiceNumber?: string | null;
+  gstin?: string | null;
   discountType: string;
   isFreeVisit: boolean;
   services: { serviceName: string; price: unknown; isCustom?: boolean }[];
@@ -102,6 +104,12 @@ export interface ReportModel {
   }[];
   bills: {
     no: string;
+    /** GST invoice number; empty on bills from before GST. */
+    invoiceNo: string;
+    gstin: string;
+    taxable: number;
+    cgst: number;
+    sgst: number;
     closedAt: Date;
     branch: string;
     customer: string;
@@ -228,7 +236,7 @@ export function buildReportModel(input: ReportInput): ReportModel {
   const stylists = input.stylists
     .map((u) => {
       const mine = sessions.filter((s) => s.stylistId === u.id);
-      const revenue = mine.reduce((a, s) => a + n(s.totalAmount) - n(s.tipAmount), 0);
+      const revenue = mine.reduce((a, s) => a + netSales(s), 0); // staff figures exclude GST
       const customers = mine.filter((s) => s.services.length > 0).length;
       return {
         name: u.name,
@@ -285,6 +293,11 @@ export function buildReportModel(input: ReportInput): ReportModel {
     .sort((a, b) => +(a.closedAt ?? a.createdAt) - +(b.closedAt ?? b.createdAt))
     .map((s) => ({
       no: bill(s.id),
+      invoiceNo: s.invoiceNumber ?? '',
+      gstin: s.gstin ?? '',
+      taxable: s.invoiceNumber ? money(n(s.gstServicesTaxable) + n(s.gstProductsTaxable)) : 0,
+      cgst: s.invoiceNumber ? money(n(s.gstServicesCgst) + n(s.gstProductsCgst)) : 0,
+      sgst: s.invoiceNumber ? money(n(s.gstServicesSgst) + n(s.gstProductsSgst)) : 0,
       closedAt: istWallClock(s.closedAt ?? s.createdAt),
       branch: nameOf(s.branchId),
       customer: s.customerName,

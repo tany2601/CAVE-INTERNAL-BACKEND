@@ -191,6 +191,17 @@ export class CloseSessionDto {
   @Min(0, { message: 'Tip amount must be non-negative.' })
   tipAmount?: number;
 
+  @ApiPropertyOptional({
+    description:
+      'The total the screen showed. If the server works out a different total (prices, discount or GST changed in the meantime) the bill is refused instead of charging a different amount.',
+    example: 1494,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 }, { message: 'The expected total must be a number with up to 2 decimal places.' })
+  @Min(0)
+  expectedTotal?: number;
+
   @ApiProperty({
     enum: PaymentMode,
     description: 'Primary payment mode for closing the session',

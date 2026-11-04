@@ -180,7 +180,7 @@ describe('report workbook', () => {
     expect(bills.rowCount).toBe(1 + 3 + 1); // header + bills + total
     const totalRow = bills.getRow(bills.rowCount);
     expect(totalRow.getCell(1).value).toBe('TOTAL');
-    expect(totalRow.getCell(12).value).toBe(899.55);
+    expect(totalRow.getCell(16).value).toBe(899.55);
     expect(wb.getWorksheet('Branches')!.getRow(4).getCell(4).value).toBe(849.55);
   });
 
@@ -190,5 +190,47 @@ describe('report workbook', () => {
     await wb.xlsx.load((await renderReportXlsx(empty)) as unknown as ArrayBuffer);
     expect(wb.getWorksheet('Bills')!.getRow(2).getCell(1).value).toBe('Nothing in this period.');
     expect(empty.summary.revenue).toBe(0);
+  });
+
+  it('reports the GST collected: per bill, in the summary, and it adds up', async () => {
+    // ₹900 of services with GST on top (taxable 900 + 22.50 + 22.50) and a ₹549 product with GST inside
+    // (taxable 465.26 + 41.87 + 41.87), plus a ₹40 tip.
+    const gstBill = sess({
+      id: 'dddddddd-0000-0000-0000-000000000004',
+      subtotal: 1449,
+      tipAmount: 40,
+      totalAmount: 945 + 549 + 40,
+      invoiceNumber: 'CV/26-27/000001',
+      gstin: '29AAOCC1889N1ZO',
+      gstServicesTaxable: 900,
+      gstServicesCgst: 22.5,
+      gstServicesSgst: 22.5,
+      gstProductsTaxable: 465.26,
+      gstProductsCgst: 41.87,
+      gstProductsSgst: 41.87,
+      services: [{ serviceName: 'Haircut', price: 900 }],
+      products: [{ price: 549, paymentMode: PaymentMode.CASH }],
+    } as never);
+    const m = buildReportModel({ ...input(), sessions: [gstBill] });
+    expect(m.summary).toMatchObject({ gstTaxable: 1365.26, gstCgst: 64.37, gstSgst: 64.37, gstTotal: 128.74 });
+    // staff revenue (and so commission and targets) leaves out the GST and the tip: 1,534 − 128.74 GST − 40 tip
+    expect(m.stylists.find((x) => x.name === 'Arjun')?.revenue).toBe(1365.26);
+    expect(m.bills[0]).toMatchObject({ invoiceNo: 'CV/26-27/000001', gstin: '29AAOCC1889N1ZO', taxable: 1365.26, cgst: 64.37, sgst: 64.37 });
+    // taxable + CGST + SGST is exactly what the customer paid for the bill (without the tip)
+    expect(Math.round((m.summary.gstTaxable + m.summary.gstTotal) * 100)).toBe(Math.round((m.summary.revenue) * 100));
+
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load((await renderReportXlsx(m)) as unknown as ArrayBuffer);
+    const cells = new Map<string, unknown>();
+    wb.getWorksheet('Summary')!.eachRow((r) => cells.set(String(r.getCell(1).value).trim(), r.getCell(2).value));
+    expect(cells.get('CGST')).toBe(64.37);
+    expect(cells.get('SGST')).toBe(64.37);
+    expect(cells.get('Total GST')).toBe(128.74);
+    expect(cells.get('Revenue excluding GST')).toBe(1365.26);
+    const row = wb.getWorksheet('Bills')!.getRow(2);
+    expect(row.getCell(2).value).toBe('CV/26-27/000001');
+    expect(row.getCell(12).value).toBe(1365.26);
+    expect(row.getCell(13).value).toBe(64.37);
+    expect(row.getCell(14).value).toBe(64.37);
   });
 });

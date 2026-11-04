@@ -1,4 +1,5 @@
 /** Pure helpers that turn bills and report figures into WhatsApp template parameters. */
+import { halfRate } from '../common/gst.js';
 
 /** "₹1,234.50" (Indian grouping); whole amounts drop the decimals. */
 export const inr = (n: number): string => {
@@ -68,9 +69,22 @@ export interface BillSession {
   branch?: { name: string } | null;
   services: { serviceName: string; price: unknown }[];
   products: { productName: string; price: unknown }[];
+  /** Set on a GST tax invoice (see Session in the schema). */
+  invoiceNumber?: string | null;
+  gstin?: string | null;
+  gstServicesRate?: unknown;
+  gstServicesCgst?: unknown;
+  gstServicesSgst?: unknown;
+  gstProductsRate?: unknown;
+  gstProductsCgst?: unknown;
+  gstProductsSgst?: unknown;
 }
 
 const num = (v: unknown) => Number(v ?? 0);
+
+/** "Street, City, State" for a bill; whatever of the three is filled in. */
+export const branchAddress = (b?: { address?: string | null; city?: string | null; state?: string | null } | null): string =>
+  [b?.address, b?.city, b?.state].map((x) => x?.trim()).filter(Boolean).join(', ');
 
 /** Short bill number printed on the message: the last 6 characters of the session id. */
 /** Product-only sales are billed to a placeholder name; nobody should be thanked by it. */
@@ -88,6 +102,16 @@ export function buildBillParams(s: BillSession): string[] {
     ...groupLines(s.products.map((x) => ({ name: x.productName, price: num(x.price) }))).map((x) => `${withQty(x.name, x.qty)} ${priceLabel(x.total)}`),
   ];
   if (num(s.discountAmount) > 0) lines.push(`Discount -${inr(num(s.discountAmount))}`);
+  // GST, as it appears on the invoice: each rate with its CGST and SGST.
+  if (s.invoiceNumber) {
+    const gstLine = (name: string, rate: unknown, cgst: unknown, sgst: unknown) =>
+      num(cgst) > 0 || num(sgst) > 0
+        ? lines.push(`${name} CGST ${halfRate(num(rate))}% ${inr(num(cgst))}, SGST ${halfRate(num(rate))}% ${inr(num(sgst))}`)
+        : 0;
+    gstLine('Services', s.gstServicesRate, s.gstServicesCgst, s.gstServicesSgst);
+    gstLine('Products', s.gstProductsRate, s.gstProductsCgst, s.gstProductsSgst);
+    if (s.gstin) lines.push(`GSTIN ${s.gstin}`);
+  }
   if (num(s.tipAmount) > 0) lines.push(`Tip ${inr(num(s.tipAmount))}`);
   return [
     isWalkInName(s.customerName) ? 'there' : cleanParam(s.customerName, 60),
@@ -95,7 +119,7 @@ export function buildBillParams(s: BillSession): string[] {
     cleanParam(lines.join(', '), 700),
     cleanParam(inr(num(s.totalAmount)), 20),
     s.paymentMode === 'GPAY' ? 'GPay' : 'Cash',
-    billNumber(s.id),
+    s.invoiceNumber ?? billNumber(s.id),
   ];
 }
 

@@ -117,6 +117,13 @@ export async function renderReportXlsx(m: ReportModel): Promise<Buffer> {
     ['Collected in cash', s.cashCollected],
     ['Collected by GPay', s.gpayCollected],
   ]);
+  block('GST collected (included in revenue above)', [
+    ['Taxable value of bills with GST', s.gstTaxable],
+    ['CGST', s.gstCgst],
+    ['SGST', s.gstSgst],
+    ['Total GST', s.gstTotal],
+    ['Revenue excluding GST', Math.round((s.revenue - s.gstTotal) * 100) / 100],
+  ]);
   block('Money out', [
     ['Expenses', s.expenses],
     ['Employee advances', s.advances],
@@ -293,6 +300,7 @@ export async function renderReportXlsx(m: ReportModel): Promise<Buffer> {
     'Bills',
     [
       { header: 'Bill no.', key: 'no', width: 10 },
+      { header: 'Invoice no.', key: 'invoiceNo', width: 18 },
       { header: 'Closed at', key: 'closedAt', width: 22, fmt: DATETIME, align: 'left' },
       { header: 'Branch', key: 'branch', width: 20 },
       { header: 'Customer', key: 'customer', width: 24 },
@@ -302,8 +310,12 @@ export async function renderReportXlsx(m: ReportModel): Promise<Buffer> {
       { header: 'Products', key: 'products', width: 28 },
       { header: 'Subtotal', key: 'subtotal', width: 13, fmt: INR, align: 'right' },
       { header: 'Discount', key: 'discount', width: 12, fmt: INR, align: 'right' },
+      { header: 'Taxable value', key: 'taxable', width: 14, fmt: INR, align: 'right' },
+      { header: 'CGST', key: 'cgst', width: 11, fmt: INR, align: 'right' },
+      { header: 'SGST', key: 'sgst', width: 11, fmt: INR, align: 'right' },
       { header: 'Tip', key: 'tip', width: 11, fmt: INR, align: 'right' },
       { header: 'Total paid', key: 'total', width: 14, fmt: INR, align: 'right' },
+      { header: 'GSTIN', key: 'gstin', width: 18 },
       { header: 'Paid by', key: 'mode', width: 9 },
       { header: 'Free visit', key: 'free', width: 10 },
       { header: 'Edited', key: 'edited', width: 8 },
@@ -313,6 +325,9 @@ export async function renderReportXlsx(m: ReportModel): Promise<Buffer> {
       totals: {
         subtotal: sum(m.bills, (r) => r.subtotal),
         discount: sum(m.bills, (r) => r.discount),
+        taxable: sum(m.bills, (r) => r.taxable),
+        cgst: sum(m.bills, (r) => r.cgst),
+        sgst: sum(m.bills, (r) => r.sgst),
         tip: sum(m.bills, (r) => r.tip),
         total: sum(m.bills, (r) => r.total),
       },

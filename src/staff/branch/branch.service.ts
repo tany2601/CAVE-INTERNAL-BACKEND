@@ -14,6 +14,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { WhatsappSettings } from '../../whatsapp/whatsapp.settings.js';
+import { GstSettings } from '../../common/gst-settings.service.js';
 import { SessionsService } from '../sessions/sessions.service.js';
 import { CreateStaffExpenseDto, UpdateStaffExpenseDto } from './dto/create-staff-expense.dto.js';
 import {
@@ -22,6 +23,7 @@ import {
   SetOpeningBalanceDto,
 } from './dto/staff-ops.dto.js';
 import { computeCommission, round2 } from '../../common/commission.util.js';
+import { gstTaxOf } from '../../admin/reports/finance.js';
 import { sortMenu } from '../../common/menu-order.js';
 import { toSetting } from '../../admin/discounts/discount-settings.js';
 import { isFreeVisitNext } from '../../common/loyalty.js';
@@ -56,6 +58,7 @@ export class BranchOpsService {
     private readonly prisma: PrismaService,
     private readonly sessionsService: SessionsService,
     @Optional() private readonly whatsappSettings?: WhatsappSettings,
+    @Optional() private readonly gstSettings?: GstSettings,
   ) {}
 
   private async resolveBranch(reqUser: any) {
@@ -170,6 +173,10 @@ export class BranchOpsService {
           stylistId: true,
           totalAmount: true,
           tipAmount: true,
+          gstServicesCgst: true,
+          gstServicesSgst: true,
+          gstProductsCgst: true,
+          gstProductsSgst: true,
           paymentMode: true,
           startedAt: true,
           closedAt: true,
@@ -187,7 +194,14 @@ export class BranchOpsService {
           closedAt: { gte: monthStart },
           stylistId: { not: null },
         },
-        _sum: { totalAmount: true, tipAmount: true },
+        _sum: {
+          totalAmount: true,
+          tipAmount: true,
+          gstServicesCgst: true,
+          gstServicesSgst: true,
+          gstProductsCgst: true,
+          gstProductsSgst: true,
+        },
       }),
       // Sessions in the chair right now: counted, and their elapsed time adds to work time.
       this.prisma.session.findMany({
@@ -217,15 +231,18 @@ export class BranchOpsService {
     const mtd = new Map(
       mtdRows.map((r) => [
         r.stylistId as string,
-        Number(r._sum.totalAmount ?? 0) - Number(r._sum.tipAmount ?? 0),
+        // Month-to-date sales without tips and without GST (what slabs and commission are worked from).
+        Number(r._sum.totalAmount ?? 0) - Number(r._sum.tipAmount ?? 0) - gstTaxOf(r._sum),
       ]),
     );
 
     return staff.map((u) => {
       const mine = completed.filter((s) => s.stylistId === u.id);
       const tips = mine.reduce((a, s) => a + Number(s.tipAmount), 0);
+      // Revenue, targets and commission are worked from sales without GST; the cash / GPay split below stays as
+      // collected, so the till still adds up.
       const revenue = mine.reduce(
-        (a, s) => a + Number(s.totalAmount) - Number(s.tipAmount),
+        (a, s) => a + Number(s.totalAmount) - Number(s.tipAmount) - gstTaxOf(s),
         0,
       );
       // Cash vs GPay split. A bill has one payment mode, and its tip follows it.
@@ -314,7 +331,7 @@ export class BranchOpsService {
 
     // Everything runs in one parallel batch (including the branch lookup): each database round trip
     // is ~100 ms away, so a chain of awaits here is what made sign-in feel slow.
-    const [branch, active, closed, expenses, payouts, dayRow, stats, discountRow] = await Promise.all([
+    const [branch, active, closed, expenses, payouts, dayRow, stats, discountRow, gstConfig] = await Promise.all([
       this.resolveBranch(reqUser),
       this.prisma.session.findMany({
         relationLoadStrategy: 'join',
@@ -351,6 +368,8 @@ export class BranchOpsService {
       this.buildStylistStats(branchId, since),
       // The discount the admin set for this branch (Admin → Discounts)
       this.prisma.branchDiscount?.findUnique({ where: { branchId } }) ?? null,
+      // GSTIN, rates and whether prices include GST (Admin → Settings)
+      this.gstSettings?.get() ?? null,
     ]);
 
     const paidBy = new Map<string, number>();
@@ -359,7 +378,16 @@ export class BranchOpsService {
         paidBy.set(p.userId, (paidBy.get(p.userId) ?? 0) + Number(p.amount));
 
     return {
-      branch: { id: branch.id, name: branch.name, code: branch.code },
+      branch: {
+        id: branch.id,
+        name: branch.name,
+        code: branch.code,
+        // Printed on the tax invoice
+        address: branch.address ?? null,
+        city: branch.city ?? null,
+        state: branch.state ?? null,
+        phone: branch.phone ?? null,
+      },
       stylists: stats.map((s) => ({
         ...s,
         // Settled only when what was paid covers what has been earned so far (more can accrue after a payout).
@@ -391,6 +419,7 @@ export class BranchOpsService {
       whatsapp: (await this.whatsappSettings?.getDelivery()) ?? { mode: 'off', billFormat: 'text' },
       // The billing screen starts with this discount when the admin has switched it on.
       discount: toSetting(discountRow),
+      gst: gstConfig,
     };
   }
 

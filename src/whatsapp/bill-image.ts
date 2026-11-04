@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Resvg } from '@resvg/resvg-js';
 import { billNumber, groupLines, inr, isWalkInName, priceLabel, withQty } from './whatsapp.format.js';
+import { halfRate } from '../common/gst.js';
 
 /** Where fonts and the logo live: <backend>/assets, reachable from both src/ and dist/. */
 const ASSETS = fileURLToPath(new URL('../../assets/', import.meta.url));
@@ -19,10 +20,37 @@ const FONT_FILES = [
 let logoUri: string | null = null;
 const logo = () => (logoUri ??= `data:image/png;base64,${readFileSync(`${ASSETS}cave-logo.png`).toString('base64')}`);
 
+/** One side (services or products) of the GST on a tax invoice. */
+export interface InvoiceGstPart {
+  rate: number;
+  inclusive: boolean;
+  taxable: number;
+  cgst: number;
+  sgst: number;
+  /** SAC / HSN code, printed when set. */
+  code?: string;
+}
+
+/** What makes the bill a GST tax invoice. Absent for bills from before GST was switched on. */
+export interface InvoiceData {
+  number: string;
+  gstin: string;
+  /** Registered name; the branch name is used when empty. */
+  legalName?: string;
+  /** e.g. "Karnataka" */
+  placeOfSupply?: string;
+  services: InvoiceGstPart;
+  products: InvoiceGstPart;
+}
+
 export interface BillImageData {
   id: string;
   customerName: string;
   branchName: string;
+  /** One line: street, city, state. */
+  branchAddress?: string;
+  branchPhone?: string;
+  invoice?: InvoiceData;
   paymentMode: string | null;
   closedAt: Date | null;
   discountAmount: number;
@@ -136,10 +164,21 @@ export function renderBillSvg(b: BillImageData): { svg: string; height: number }
   parts.push(`<image href="${logo()}" x="${(W - 400) / 2}" y="84" width="400" height="104"/>`);
   text(W / 2, 236, "MEN'S SALON", { size: 26, fill: '#9A9AA6', anchor: 'middle', spacing: 10, weight: 500 });
   text(W / 2, 282, b.branchName.toUpperCase(), { size: 30, fill: '#CFCFD8', anchor: 'middle', spacing: 5, weight: 600 });
+  // A tax invoice names the seller: registered name, the branch's address and the GSTIN.
+  let headerBottom = 282;
+  if (b.invoice) {
+    text(W / 2, (headerBottom += 56), 'TAX INVOICE', { size: 30, fill: '#E7C873', anchor: 'middle', spacing: 8, weight: 600 });
+    if (b.invoice.legalName) text(W / 2, (headerBottom += 44), b.invoice.legalName, { size: 28, fill: '#CFCFD8', anchor: 'middle', weight: 600 });
+    if (b.branchAddress) {
+      for (const line of wrapText(b.branchAddress, 26, W - PAD * 2 - 40, 0.5)) text(W / 2, (headerBottom += 38), line, { size: 26, fill: '#9A9AA6', anchor: 'middle' });
+    }
+    if (b.branchPhone) text(W / 2, (headerBottom += 38), `Phone: ${b.branchPhone}`, { size: 26, fill: '#9A9AA6', anchor: 'middle' });
+    text(W / 2, (headerBottom += 42), `GSTIN: ${b.invoice.gstin}`, { size: 28, fill: '#E5E5EC', anchor: 'middle', spacing: 2, weight: 600 });
+  }
 
   // Greeting
   const first = isWalkInName(b.customerName) ? '' : (b.customerName.trim().split(/\s+/)[0] || '').slice(0, 24);
-  y = 372;
+  y = Math.max(372, headerBottom + 90);
   text(PAD, (y += 100), first ? `Thank you, ${first}!` : 'Thank you!', { size: 84, family: 'Barlow Condensed', weight: 800 });
   text(PAD, (y += 54), 'It was a pleasure having you with us.', { size: 34, fill: '#B4B4C0' });
   y += 56;
@@ -166,8 +205,25 @@ export function renderBillSvg(b: BillImageData): { svg: string; height: number }
   };
   for (const s of groupLines(b.services)) row(withQty(s.name, s.qty), priceLabel(s.total));
   for (const p of groupLines(b.products)) row(withQty(p.name, p.qty), priceLabel(p.total));
+  // GST: the taxable value of each side and its CGST / SGST, so the lines below add up to the total.
+  const taxRows: (readonly [string, string, string])[] = [];
+  if (b.invoice) {
+    const sides = [
+      ['Services', b.invoice.services],
+      ['Products', b.invoice.products],
+    ] as const;
+    for (const [name, part] of sides) {
+      if (part.taxable <= 0 && part.cgst <= 0) continue;
+      const half = halfRate(part.rate);
+      const note = part.inclusive ? ' (incl.)' : '';
+      taxRows.push([`${name} taxable value${part.code ? ` (${part.code})` : ''}`, inr(part.taxable), '#CFCFD8']);
+      taxRows.push([`CGST @ ${half}%${note}`, inr(part.cgst), '#B4B4C0']);
+      taxRows.push([`SGST @ ${half}%${note}`, inr(part.sgst), '#B4B4C0']);
+    }
+  }
   const extras = [
     ...(b.discountAmount > 0 ? [['Discount', `-${inr(b.discountAmount)}`, '#6FCF97'] as const] : []),
+    ...taxRows,
     ...(b.tipAmount > 0 ? [['Tip', inr(b.tipAmount), '#CFCFD8'] as const] : []),
   ];
   if (extras.length) {
@@ -176,8 +232,8 @@ export function renderBillSvg(b: BillImageData): { svg: string; height: number }
     y += 6;
     for (const [label, value, fill] of extras) {
       y += 54;
-      text(IN, y, label, { size: 34, fill });
-      text(W - IN, y, value, { size: 34, fill, anchor: 'end', weight: 500 });
+      text(IN, y, label, { size: 32, fill });
+      text(W - IN, y, value, { size: 32, fill, anchor: 'end', weight: 500 });
     }
   }
   y += 34;
@@ -234,8 +290,9 @@ export function renderBillSvg(b: BillImageData): { svg: string; height: number }
 
   // Footer
   y += 60;
-  text(W / 2, y, `Paid by ${b.paymentMode === 'GPAY' ? 'GPay' : 'Cash'}  ·  Bill no. ${billNumber(b.id)}`, { size: 30, fill: '#B4B4C0', anchor: 'middle', weight: 500 });
+  text(W / 2, y, `Paid by ${b.paymentMode === 'GPAY' ? 'GPay' : 'Cash'}  ·  ${b.invoice ? `Invoice no. ${b.invoice.number}` : `Bill no. ${billNumber(b.id)}`}`, { size: 30, fill: '#B4B4C0', anchor: 'middle', weight: 500 });
   text(W / 2, (y += 44), when(b.closedAt), { size: 28, fill: '#8A8A96', anchor: 'middle' });
+  if (b.invoice?.placeOfSupply) text(W / 2, (y += 40), `Place of supply: ${b.invoice.placeOfSupply}`, { size: 26, fill: '#8A8A96', anchor: 'middle' });
   y += 76;
   text(W / 2, y, 'See you again soon.', { size: 56, family: 'Barlow Condensed', weight: 800, anchor: 'middle', fill: '#F5F5F5' });
   y += 84;

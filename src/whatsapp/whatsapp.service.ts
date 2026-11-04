@@ -1,11 +1,16 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { SessionStatus, WhatsappKind } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { WhatsappSettings } from './whatsapp.settings.js';
 import { BillImageData, renderBillPng } from './bill-image.js';
 import { WhatsappClient } from './whatsapp.client.js';
 import { WhatsappOutbox } from './whatsapp.outbox.js';
-import { buildBillParams, toWhatsappNumber } from './whatsapp.format.js';
+import { branchAddress, buildBillParams, toWhatsappNumber } from './whatsapp.format.js';
+import { GST_STATE_NAMES } from '../common/gst.js';
+import { GstSettings } from '../common/gst-settings.service.js';
+
+/** What a bill needs to know about its branch: the name, and the address printed on a tax invoice. */
+const BRANCH_FOR_BILL = { name: true, address: true, city: true, state: true, phone: true } as const;
 
 @Injectable()
 export class WhatsappService {
@@ -16,6 +21,7 @@ export class WhatsappService {
     private readonly client: WhatsappClient,
     private readonly outbox: WhatsappOutbox,
     private readonly settings: WhatsappSettings,
+    @Optional() private readonly gst?: GstSettings,
   ) {}
 
   /**
@@ -31,7 +37,7 @@ export class WhatsappService {
       if (mode !== 'api') return;
       const session = await this.prisma.session.findUnique({
         where: { id: sessionId },
-        include: { branch: { select: { name: true } }, customer: { select: { qualifyingCompletedSessionsCount: true } }, services: true, products: true },
+        include: { branch: { select: BRANCH_FOR_BILL }, customer: { select: { qualifyingCompletedSessionsCount: true } }, services: true, products: true },
       });
       if (!session || session.status !== SessionStatus.COMPLETED) return;
       const to = toWhatsappNumber(session.customerMobile);
@@ -47,7 +53,7 @@ export class WhatsappService {
       let header: { id: string } | undefined;
       if (billFormat === 'image') {
         try {
-          header = { id: await this.client.uploadImage(renderBillPng(this.imageData(session)), `bill-${session.id}.png`) };
+          header = { id: await this.client.uploadImage(renderBillPng(await this.imageData(session)), `bill-${session.id}.png`) };
         } catch (e) {
           this.logger.warn(`Bill picture failed, sending text instead: ${(e as Error).message}`);
         }
@@ -76,7 +82,7 @@ export class WhatsappService {
     return { status: msg?.status ?? 'none' };
   }
 
-  private imageData(session: {
+  private async imageData(session: {
     id: string;
     customerName: string;
     paymentMode: string | null;
@@ -84,12 +90,54 @@ export class WhatsappService {
     discountAmount: unknown;
     tipAmount: unknown;
     totalAmount: unknown;
-    branch?: { name: string } | null;
+    branch?: { name: string; address?: string | null; city?: string | null; state?: string | null; phone?: string | null } | null;
     customer?: { qualifyingCompletedSessionsCount: number } | null;
     services: { serviceName: string; price: unknown }[];
     products: { productName: string; price: unknown }[];
-  }): BillImageData {
+    invoiceNumber?: string | null;
+    gstin?: string | null;
+    gstServicesRate?: unknown;
+    gstServicesInclusive?: boolean;
+    gstServicesTaxable?: unknown;
+    gstServicesCgst?: unknown;
+    gstServicesSgst?: unknown;
+    gstProductsRate?: unknown;
+    gstProductsInclusive?: boolean;
+    gstProductsTaxable?: unknown;
+    gstProductsCgst?: unknown;
+    gstProductsSgst?: unknown;
+  }): Promise<BillImageData> {
+    // A bill with an invoice number is a GST tax invoice: it carries the GSTIN, the branch address and the tax.
+    let invoice: BillImageData['invoice'];
+    if (session.invoiceNumber && session.gstin) {
+      const settings = await this.gst?.get();
+      invoice = {
+        number: session.invoiceNumber,
+        gstin: session.gstin,
+        legalName: settings?.legalName || undefined,
+        placeOfSupply: GST_STATE_NAMES[session.gstin.slice(0, 2)],
+        services: {
+          rate: Number(session.gstServicesRate ?? 0),
+          inclusive: !!session.gstServicesInclusive,
+          taxable: Number(session.gstServicesTaxable ?? 0),
+          cgst: Number(session.gstServicesCgst ?? 0),
+          sgst: Number(session.gstServicesSgst ?? 0),
+          code: settings?.servicesCode || undefined,
+        },
+        products: {
+          rate: Number(session.gstProductsRate ?? 0),
+          inclusive: !!session.gstProductsInclusive,
+          taxable: Number(session.gstProductsTaxable ?? 0),
+          cgst: Number(session.gstProductsCgst ?? 0),
+          sgst: Number(session.gstProductsSgst ?? 0),
+          code: settings?.productsCode || undefined,
+        },
+      };
+    }
     return {
+      invoice,
+      branchAddress: branchAddress(session.branch) || undefined,
+      branchPhone: session.branch?.phone || undefined,
       id: session.id,
       customerName: session.customerName,
       branchName: session.branch?.name ?? 'CAVE',
@@ -111,9 +159,9 @@ export class WhatsappService {
   async billImage(sessionId: string, branchId: string): Promise<Buffer | null> {
     const session = await this.prisma.session.findUnique({
       where: { id: sessionId },
-      include: { branch: { select: { name: true } }, customer: { select: { qualifyingCompletedSessionsCount: true } }, services: true, products: true },
+      include: { branch: { select: BRANCH_FOR_BILL }, customer: { select: { qualifyingCompletedSessionsCount: true } }, services: true, products: true },
     });
     if (!session || session.branchId !== branchId || session.status !== SessionStatus.COMPLETED) return null;
-    return renderBillPng(this.imageData(session));
+    return renderBillPng(await this.imageData(session));
   }
 }

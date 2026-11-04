@@ -20,6 +20,13 @@ export interface FinSession {
   createdAt: Date;
   closedAt: Date | null;
   isEdited: boolean;
+  /** GST on a tax invoice (all zero / absent on bills from before GST). */
+  gstServicesTaxable?: unknown;
+  gstServicesCgst?: unknown;
+  gstServicesSgst?: unknown;
+  gstProductsTaxable?: unknown;
+  gstProductsCgst?: unknown;
+  gstProductsSgst?: unknown;
   services: { serviceName: string; price: unknown }[];
   products: { price: unknown; paymentMode: PaymentMode }[];
 }
@@ -58,11 +65,32 @@ export const SESSION_FIN_SELECT = {
   createdAt: true,
   closedAt: true,
   isEdited: true,
+  gstServicesTaxable: true,
+  gstServicesCgst: true,
+  gstServicesSgst: true,
+  gstProductsTaxable: true,
+  gstProductsCgst: true,
+  gstProductsSgst: true,
   services: { select: { serviceName: true, price: true } },
   products: { select: { price: true, paymentMode: true } },
 } as const;
 
 const n = (v: unknown) => Number(v ?? 0);
+
+/** The GST (CGST + SGST) inside a bill's total; 0 for bills from before GST. */
+export const gstTaxOf = (s: {
+  gstServicesCgst?: unknown;
+  gstServicesSgst?: unknown;
+  gstProductsCgst?: unknown;
+  gstProductsSgst?: unknown;
+}): number =>
+  Math.round((n(s.gstServicesCgst) + n(s.gstServicesSgst) + n(s.gstProductsCgst) + n(s.gstProductsSgst)) * 100) / 100;
+
+/**
+ * What a bill earned the salon from its customer: the total without the tip and without the GST, which belongs to
+ * the government. Staff revenue, targets and commission are worked from this.
+ */
+export const netSales = (s: FinSession): number => Math.round((n(s.totalAmount) - n(s.tipAmount) - gstTaxOf(s)) * 100) / 100;
 
 export interface Finance {
   /** Customers served: completed bills that include at least one service. */
@@ -77,6 +105,11 @@ export interface Finance {
   productSalesGpay: number;
   productSales: number;
   tips: number;
+  /** GST on tax invoices in the period. Revenue above includes the GST that customers paid. */
+  gstTaxable: number;
+  gstCgst: number;
+  gstSgst: number;
+  gstTotal: number;
   cashCollected: number;
   gpayCollected: number;
   expensesCash: number;
@@ -99,6 +132,10 @@ export const emptyFinance = (): Finance => ({
   productSalesGpay: 0,
   productSales: 0,
   tips: 0,
+  gstTaxable: 0,
+  gstCgst: 0,
+  gstSgst: 0,
+  gstTotal: 0,
   cashCollected: 0,
   gpayCollected: 0,
   expensesCash: 0,
@@ -135,6 +172,9 @@ export function aggregateFinance(
     f.revenue += revenue;
     f.serviceRevenue += exact ? subtotal - products - n(s.serviceDiscountAmount) : (subtotal - products) * keep;
     f.tips += n(s.tipAmount);
+    f.gstTaxable += n(s.gstServicesTaxable) + n(s.gstProductsTaxable);
+    f.gstCgst += n(s.gstServicesCgst) + n(s.gstProductsCgst);
+    f.gstSgst += n(s.gstServicesSgst) + n(s.gstProductsSgst);
     for (const p of s.products) {
       if (p.paymentMode === PaymentMode.GPAY) f.productSalesGpay += n(p.price) * productKeep;
       else f.productSalesCash += n(p.price) * productKeep;
@@ -152,6 +192,7 @@ export function aggregateFinance(
     else if (t.paymentMode === PaymentMode.GPAY) f.expensesGpay += n(t.amount);
     else f.expensesCash += n(t.amount);
   }
+  f.gstTotal = round2(f.gstCgst) + round2(f.gstSgst);
   f.expenses = f.expensesCash + f.expensesGpay;
   for (const p of payouts) {
     if (p.kind === 'TIP_WITHDRAWAL') f.tipWithdrawals += n(p.amount);

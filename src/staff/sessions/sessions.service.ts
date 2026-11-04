@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  ConflictException,
   UnauthorizedException,
   Optional,
 } from '@nestjs/common';
@@ -14,6 +15,11 @@ import { AssignStylistDto } from './dto/assign-stylist.dto.js';
 import { freeHaircutIndex, isFreeVisitNext } from '../../common/loyalty.js';
 import { BillDiscount, billDiscount, wholeBillDiscount } from '../../common/discount.js';
 import { WhatsappService } from '../../whatsapp/whatsapp.service.js';
+import { BillGst, billGst, financialYear, GstConfig, invoiceNumber as makeInvoiceNumber } from '../../common/gst.js';
+import { GstSettings } from '../../common/gst-settings.service.js';
+
+/** The GST terms a bill is worked out under: today's settings for a new bill, the bill's own for an edit. */
+type GstTerms = Pick<GstConfig, 'gstin' | 'services' | 'products'>;
 
 /** Another request closed this bill first. */
 class AlreadyClosed extends Error {}
@@ -29,7 +35,41 @@ export class SessionsService {
   constructor(
     private readonly prisma: PrismaService,
     @Optional() private readonly whatsapp?: WhatsappService,
+    @Optional() private readonly gstSettings?: GstSettings,
   ) {}
+
+  /** GST terms for a new bill, or null when GST is switched off. */
+  private async currentGst(): Promise<GstTerms | null> {
+    const cfg = await this.gstSettings?.get();
+    return cfg?.enabled ? { gstin: cfg.gstin, services: cfg.services, products: cfg.products } : null;
+  }
+
+  /** The terms an issued invoice was made under (kept on the bill), so editing it never changes its rates. */
+  private billTerms(s: any): GstTerms | null {
+    if (!s?.invoiceNumber || !s.gstin) return null;
+    return {
+      gstin: s.gstin,
+      services: { rate: Number(s.gstServicesRate), inclusive: !!s.gstServicesInclusive },
+      products: { rate: Number(s.gstProductsRate), inclusive: !!s.gstProductsInclusive },
+    };
+  }
+
+  /** The GST columns of a bill (all zero when GST is not applied). */
+  private gstColumns(gst: BillGst | null, terms: GstTerms | null) {
+    return {
+      gstin: terms?.gstin ?? null,
+      gstServicesRate: terms ? terms.services.rate : 0,
+      gstServicesInclusive: terms ? terms.services.inclusive : false,
+      gstServicesTaxable: gst?.services.taxable ?? 0,
+      gstServicesCgst: gst?.services.cgst ?? 0,
+      gstServicesSgst: gst?.services.sgst ?? 0,
+      gstProductsRate: terms ? terms.products.rate : 0,
+      gstProductsInclusive: terms ? terms.products.inclusive : false,
+      gstProductsTaxable: gst?.products.taxable ?? 0,
+      gstProductsCgst: gst?.products.cgst ?? 0,
+      gstProductsSgst: gst?.products.sgst ?? 0,
+    };
+  }
 
   private async resolveBranchContext(reqUser: any) {
     if (!reqUser) {
@@ -92,6 +132,29 @@ export class SessionsService {
     return png;
   }
 
+  /** The GST breakdown printed on a bill, from the figures saved with it. */
+  private gstOutput(session: any) {
+    const part = (side: 'Services' | 'Products') => ({
+      rate: Number(session[`gst${side}Rate`]),
+      inclusive: !!session[`gst${side}Inclusive`],
+      taxable: Number(session[`gst${side}Taxable`]),
+      cgst: Number(session[`gst${side}Cgst`]),
+      sgst: Number(session[`gst${side}Sgst`]),
+    });
+    const services = part('Services');
+    const products = part('Products');
+    const cgst = this.round2(services.cgst + products.cgst);
+    const sgst = this.round2(services.sgst + products.sgst);
+    return {
+      services,
+      products,
+      taxable: this.round2(services.taxable + products.taxable),
+      cgst,
+      sgst,
+      tax: this.round2(cgst + sgst),
+    };
+  }
+
   public formatSessionOutput(session: any) {
     if (!session) return null;
     const startedAt = session.startedAt || session.createdAt;
@@ -150,6 +213,9 @@ export class SessionsService {
       productDiscountAmount: Number(session.productDiscountAmount ?? 0),
       tipAmount: Number(session.tipAmount),
       totalAmount: Number(session.totalAmount),
+      invoiceNumber: session.invoiceNumber ?? null,
+      gstin: session.gstin ?? null,
+      gst: session.invoiceNumber ? this.gstOutput(session) : null,
       paymentMode: session.paymentMode ?? null,
       startedAt: session.startedAt ?? null,
       closedAt: session.closedAt ?? null,
@@ -515,8 +581,16 @@ export class SessionsService {
     };
   }
 
+  /** The screen's total must be the total saved: a changed price, discount or GST rate in between is refused. */
+  private checkExpectedTotal(expected: number | undefined, actual: number) {
+    if (expected === undefined || Math.abs(expected - actual) < 0.005) return;
+    throw new ConflictException(
+      `The bill now comes to ₹${actual.toFixed(2)} (prices, discount or GST were updated). Please check the bill and confirm again.`,
+    );
+  }
+
   /** Validates the bill lines against branch pricing and computes all totals. */
-  private async computeBilling(branchId: string, dto: CloseSessionDto, freeVisit = false) {
+  private async computeBilling(branchId: string, dto: CloseSessionDto, freeVisit = false, terms: GstTerms | null = null) {
     const hasServices = dto.services && dto.services.length > 0;
     const hasCustomServices = dto.customServices && dto.customServices.length > 0;
     const hasProducts = dto.productSales && dto.productSales.length > 0;
@@ -646,7 +720,16 @@ export class SessionsService {
 
     const tipAmount = this.round2(dto.tipAmount ?? 0);
     const afterDiscountSubtotal = this.round2(preDiscountSubtotal - discountAmount);
-    const totalAmount = this.round2(afterDiscountSubtotal + tipAmount);
+    // GST is worked from the services and the products after their own discounts. The tip is the customer's
+    // gift, not part of the price, so it carries no GST.
+    const gst = terms
+      ? billGst(
+          terms,
+          this.round2(servicesSub - discount.services.amount),
+          this.round2(productsSub - discount.products.amount),
+        )
+      : null;
+    const totalAmount = this.round2((gst ? gst.payable : afterDiscountSubtotal) + tipAmount);
 
     return {
       menuServiceItems,
@@ -659,6 +742,8 @@ export class SessionsService {
       discountParts: discount,
       tipAmount,
       totalAmount,
+      gst,
+      gstTerms: terms,
     };
   }
 
@@ -706,6 +791,8 @@ export class SessionsService {
     const billingContact = this.normalizePhone(dto.whatsappTo);
     let freeVisit = !!session.customer && isFreeVisitNext(session.customer.qualifyingCompletedSessionsCount);
 
+    const terms = await this.currentGst();
+
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const {
         menuServiceItems,
@@ -718,7 +805,9 @@ export class SessionsService {
         discountParts,
         tipAmount,
         totalAmount,
-      } = await this.computeBilling(branchId, dto, freeVisit);
+        gst,
+      } = await this.computeBilling(branchId, dto, freeVisit, terms);
+      this.checkExpectedTotal(dto.expectedTotal, totalAmount);
 
       const closedAt = new Date();
       const startedAt = session.startedAt || session.createdAt;
@@ -735,6 +824,7 @@ export class SessionsService {
               discountValue,
               discountAmount,
               ...this.discountColumns(discountParts),
+              ...this.gstColumns(gst, terms),
               tipAmount,
               totalAmount,
               paymentMode: dto.paymentMode,
@@ -785,6 +875,21 @@ export class SessionsService {
                 price: item.price,
                 paymentMode: item.paymentMode,
               })),
+            });
+          }
+
+          // 4. The invoice number, taken last so the counter row is locked for as short a time as possible. It
+          // belongs to this transaction: if anything above fails and rolls back, the number is not used up.
+          if (terms) {
+            const fy = financialYear(closedAt);
+            const counter = await tx.invoiceCounter.upsert({
+              where: { fy },
+              create: { fy, last: 1 },
+              update: { last: { increment: 1 } },
+            });
+            await tx.session.update({
+              where: { id: sessionId },
+              data: { invoiceNumber: makeInvoiceNumber(fy, counter.last) },
             });
           }
 
@@ -851,7 +956,8 @@ export class SessionsService {
       throw new BadRequestException('Only billed sessions can be edited.');
     }
 
-    const billing = await this.computeBilling(branchId, dto, session.isFreeVisit);
+    const billing = await this.computeBilling(branchId, dto, session.isFreeVisit, this.billTerms(session));
+    this.checkExpectedTotal(dto.expectedTotal, billing.totalAmount);
 
     const updated = await this.prisma.$transaction(async (tx) => {
       await tx.sessionService.deleteMany({ where: { sessionId } });
@@ -891,6 +997,8 @@ export class SessionsService {
           discountValue: billing.discountValue,
           discountAmount: billing.discountAmount,
           ...this.discountColumns(billing.discountParts),
+          // An issued invoice keeps its number, GSTIN and rates; only its amounts follow the correction.
+          ...(billing.gstTerms ? this.gstColumns(billing.gst, billing.gstTerms) : {}),
           tipAmount: billing.tipAmount,
           totalAmount: billing.totalAmount,
           paymentMode: dto.paymentMode,

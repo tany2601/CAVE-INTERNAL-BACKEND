@@ -119,3 +119,62 @@ describe('the same service several times on one bill', () => {
     expect(svg).toContain('Beard Trim');
   });
 });
+
+describe('GST tax invoice picture', () => {
+  const invoice = (over: Partial<BillImageData> = {}) =>
+    bill({
+      branchName: 'CAVE BTM',
+      branchAddress: '12, 4th Cross, BTM 2nd Stage, Bengaluru, Karnataka',
+      branchPhone: '+91 98765 43210',
+      services: [{ name: 'Haircut', price: 300 }],
+      products: [{ name: 'Matte Clay', price: 599 }],
+      discountAmount: 0,
+      tipAmount: 0,
+      totalAmount: 914 + 1.5 * 0 + 0,
+      invoice: {
+        number: 'CV/26-27/000001',
+        gstin: '29AAOCC1889N1ZO',
+        legalName: 'CAVE Salons',
+        placeOfSupply: 'Karnataka',
+        services: { rate: 5, inclusive: false, taxable: 300, cgst: 7.5, sgst: 7.5, code: '999721' },
+        products: { rate: 18, inclusive: true, taxable: 507.62, cgst: 45.69, sgst: 45.69 },
+      },
+      ...over,
+    });
+
+  it('prints the GSTIN, the branch address, the invoice number and each tax line', () => {
+    const { svg } = renderBillSvg(invoice());
+    for (const expected of [
+      'TAX INVOICE',
+      'GSTIN: 29AAOCC1889N1ZO',
+      'CAVE Salons',
+      '12, 4th Cross, BTM 2nd Stage, Bengaluru, Karnataka',
+      'Invoice no. CV/26-27/000001',
+      'Place of supply: Karnataka',
+      'Services taxable value (999721)',
+      'Products taxable value',
+      'CGST @ 2.5%',
+      'SGST @ 2.5%',
+      'CGST @ 9% (incl.)',
+      'SGST @ 9% (incl.)',
+      '₹507.62',
+      '₹45.69',
+      '₹7.50',
+    ]) {
+      expect(svg).toContain(expected);
+    }
+    expect(svg).not.toContain('Bill no.');
+  });
+
+  it('a bill from before GST looks as it always did', () => {
+    const { svg } = renderBillSvg(bill());
+    expect(svg).not.toContain('TAX INVOICE');
+    expect(svg).not.toContain('GSTIN');
+    expect(svg).toContain('Bill no. 6789AB');
+  });
+
+  it('renders to a picture even with a long address', () => {
+    const png = renderBillPng(invoice({ branchAddress: 'No. 123, Some Very Long Road Name, Opposite The Big Landmark Building, Near The Old Market, Bengaluru, Karnataka' }));
+    expect(png.subarray(1, 4).toString()).toBe('PNG');
+  });
+});

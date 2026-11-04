@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { SessionStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { addDaysToKey, dayKey, dayStart } from '../common/time.util.js';
+import { netSales } from '../admin/reports/finance.js';
 import { buildReportModel, ReportModel, ReportPayout, ReportSession, ReportTransaction } from './report-model.js';
 import { renderReportXlsx, reportFileName } from './report-xlsx.js';
 
@@ -59,6 +60,14 @@ export class ReportExport {
           closedAt: true,
           isEdited: true,
           isFreeVisit: true,
+          invoiceNumber: true,
+          gstin: true,
+          gstServicesTaxable: true,
+          gstServicesCgst: true,
+          gstServicesSgst: true,
+          gstProductsTaxable: true,
+          gstProductsCgst: true,
+          gstProductsSgst: true,
           services: { select: { serviceName: true, price: true, isCustom: true } },
           products: { select: { productName: true, price: true, paymentMode: true } },
           customer: { select: { createdAt: true, qualifyingCompletedSessionsCount: true } },
@@ -95,7 +104,15 @@ export class ReportExport {
       }) as unknown as Promise<ReportPayout[]>,
       this.prisma.session.findMany({
         where: { status: SessionStatus.COMPLETED, closedAt: { gte: monthStart, lt: end }, stylistId: { not: null }, ...only },
-        select: { stylistId: true, totalAmount: true, tipAmount: true },
+        select: {
+          stylistId: true,
+          totalAmount: true,
+          tipAmount: true,
+          gstServicesCgst: true,
+          gstServicesSgst: true,
+          gstProductsCgst: true,
+          gstProductsSgst: true,
+        },
       }),
     ]);
 
@@ -117,7 +134,7 @@ export class ReportExport {
     const monthRevenue = new Map<string, number>();
     for (const s of monthSessions) {
       if (!s.stylistId) continue;
-      monthRevenue.set(s.stylistId, (monthRevenue.get(s.stylistId) ?? 0) + Number(s.totalAmount) - Number(s.tipAmount));
+      monthRevenue.set(s.stylistId, (monthRevenue.get(s.stylistId) ?? 0) + netSales(s as never));
     }
 
     // Branches that are switched off still show if they had activity in the period.

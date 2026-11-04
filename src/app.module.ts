@@ -4,6 +4,7 @@ import { PrismaModule } from './prisma/prisma.module.js';
 import { SupabaseModule } from './supabase/supabase.module.js';
 import { HealthModule } from './health/health.module.js';
 import { AdminModule } from './admin/admin.module.js';
+import { GstModule } from './common/gst-settings.service.js';
 import { BranchAuthModule } from './auth/branch/branch-auth.module.js';
 import { SessionsModule } from './staff/sessions/sessions.module.js';
 import { BranchOpsModule } from './staff/branch/branch.module.js';
@@ -18,6 +19,7 @@ import { AssistantModule } from './assistant/assistant.module.js';
     PrismaModule,
     SupabaseModule,
     HealthModule,
+    GstModule,
     AdminModule,
     BranchAuthModule,
     SessionsModule,

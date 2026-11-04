@@ -1,0 +1,130 @@
+import { describe, it, expect } from 'vitest';
+import { netSales } from '../admin/reports/finance.js';
+import { billGst, DEFAULT_GST, financialYear, gstPart, halfRate, invoiceNumber, isValidGstin } from './gst.js';
+
+const paise = (n: number) => Math.round(n * 100);
+
+describe('GST added on top (services, 5% = 2.5% + 2.5%)', () => {
+  const side = { rate: 5, inclusive: false };
+
+  it('a ₹300 haircut: ₹7.50 + ₹7.50, customer pays ₹315', () => {
+    expect(gstPart(300, side)).toMatchObject({ taxable: 300, cgst: 7.5, sgst: 7.5, payable: 315 });
+  });
+
+  it('three haircuts and a wash (₹1,000), then a 10% discount (₹900 taxable)', () => {
+    expect(gstPart(1000, side)).toMatchObject({ cgst: 25, sgst: 25, payable: 1050 });
+    expect(gstPart(900, side)).toMatchObject({ taxable: 900, cgst: 22.5, sgst: 22.5, payable: 945 });
+  });
+
+  it('rounds each half to the nearest paisa, halves stay equal', () => {
+    // ₹101 x 2.5% = ₹2.525 -> ₹2.53 each
+    expect(gstPart(101, side)).toMatchObject({ cgst: 2.53, sgst: 2.53, payable: 106.06 });
+    // ₹100.10 x 2.5% = ₹2.5025 -> ₹2.50 each
+    expect(gstPart(100.1, side)).toMatchObject({ cgst: 2.5, sgst: 2.5, payable: 105.1 });
+  });
+
+  it('nothing to tax: a free line or an empty side', () => {
+    expect(gstPart(0, side)).toMatchObject({ taxable: 0, cgst: 0, sgst: 0, payable: 0 });
+  });
+});
+
+describe('GST inside the price (products, 18% = 9% + 9%)', () => {
+  const side = { rate: 18, inclusive: true };
+
+  it('an MRP of ₹599: the customer pays ₹599, tax is carved out', () => {
+    expect(gstPart(599, side)).toMatchObject({ taxable: 507.62, cgst: 45.69, sgst: 45.69, payable: 599 });
+  });
+
+  it('an MRP of ₹95', () => {
+    expect(gstPart(95, side)).toMatchObject({ taxable: 80.5, cgst: 7.25, sgst: 7.25, payable: 95 });
+  });
+
+  it('an MRP of ₹118 splits cleanly: ₹100 + ₹9 + ₹9', () => {
+    expect(gstPart(118, side)).toMatchObject({ taxable: 100, cgst: 9, sgst: 9, payable: 118 });
+  });
+
+  it('zero rate leaves the price untouched', () => {
+    expect(gstPart(250, { rate: 0, inclusive: true })).toMatchObject({ taxable: 250, cgst: 0, sgst: 0, payable: 250 });
+  });
+});
+
+describe('a whole bill', () => {
+  it('services added on top, products included: 3 haircuts + wash + clay, 10% off services, ₹50 off products', () => {
+    const g = billGst(DEFAULT_GST, 900, 549);
+    expect(g.services).toMatchObject({ taxable: 900, cgst: 22.5, sgst: 22.5, payable: 945 });
+    expect(g.products).toMatchObject({ payable: 549, taxable: 465.26, cgst: 41.87, sgst: 41.87 });
+    expect(g.payable).toBe(945 + 549);
+    expect(g.cgst).toBe(g.sgst);
+    expect(g.taxable + g.cgst + g.sgst).toBeCloseTo(g.payable, 2);
+  });
+
+  it('totals add up to the paisa and CGST always equals SGST (random bills)', () => {
+    let seed = 12345;
+    const rand = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    for (let i = 0; i < 4000; i += 1) {
+      const sv = Math.round(rand() * 500000) / 100;
+      const pr = Math.round(rand() * 500000) / 100;
+      const cfg = {
+        services: { rate: [5, 12, 18, 0][i % 4], inclusive: i % 2 === 0 },
+        products: { rate: [18, 5, 28, 0][i % 4], inclusive: i % 3 !== 0 },
+      };
+      const g = billGst(cfg, sv, pr);
+      expect(paise(g.cgst)).toBe(paise(g.sgst));
+      expect(paise(g.taxable) + paise(g.cgst) + paise(g.sgst)).toBe(paise(g.payable));
+      expect(paise(g.services.payable) + paise(g.products.payable)).toBe(paise(g.payable));
+      if (cfg.services.inclusive) expect(paise(g.services.payable)).toBe(paise(sv));
+      if (cfg.products.inclusive) expect(paise(g.products.payable)).toBe(paise(pr));
+      if (!cfg.services.inclusive) expect(paise(g.services.taxable)).toBe(paise(sv));
+      // never more than a paisa away from the exact tax
+      const idealTax = cfg.products.inclusive ? (pr * cfg.products.rate) / (100 + cfg.products.rate) : (pr * cfg.products.rate) / 100;
+      expect(Math.abs(g.products.cgst + g.products.sgst - idealTax)).toBeLessThanOrEqual(0.0101);
+    }
+  });
+});
+
+describe('GSTIN', () => {
+  it('accepts the registered GSTIN', () => {
+    expect(isValidGstin('29AAOCC1889N1ZO')).toBe(true);
+    expect(isValidGstin(' 29aaocc1889n1zo ')).toBe(true);
+  });
+  it('rejects typos and malformed numbers', () => {
+    expect(isValidGstin('29AAOCC1889N1ZP')).toBe(false); // wrong check character
+    expect(isValidGstin('29AAOCC1889N1Z')).toBe(false);
+    expect(isValidGstin('')).toBe(false);
+    expect(isValidGstin('ABAAOCC1889N1ZO')).toBe(false);
+  });
+});
+
+describe('invoice numbers', () => {
+  it('follow the April to March year in Indian time', () => {
+    expect(financialYear(new Date('2026-04-01T00:30:00+05:30'))).toBe('26-27');
+    expect(financialYear(new Date('2026-03-31T23:59:00+05:30'))).toBe('25-26');
+    expect(financialYear(new Date('2027-03-31T23:30:00+05:30'))).toBe('26-27');
+    expect(financialYear(new Date('2027-04-01T00:30:00+05:30'))).toBe('27-28');
+    expect(financialYear(new Date('2026-11-04T10:00:00Z'))).toBe('26-27');
+  });
+  it('fit the 16 character limit and are in order', () => {
+    expect(invoiceNumber('26-27', 1)).toBe('CV/26-27/000001');
+    expect(invoiceNumber('26-27', 999999).length).toBeLessThanOrEqual(16);
+  });
+  it('prints half the rate on each of CGST and SGST', () => {
+    expect(halfRate(5)).toBe('2.5');
+    expect(halfRate(18)).toBe('9');
+  });
+});
+
+describe('what a bill earns the salon (for staff revenue and commission)', () => {
+  it('leaves out the tip and the GST', () => {
+    const bill = {
+      totalAmount: 1534,
+      tipAmount: 40,
+      gstServicesCgst: 22.5,
+      gstServicesSgst: 22.5,
+      gstProductsCgst: 41.87,
+      gstProductsSgst: 41.87,
+    };
+    expect(netSales(bill as never)).toBe(1365.26);
+    // a bill from before GST is unchanged
+    expect(netSales({ totalAmount: 500, tipAmount: 50 } as never)).toBe(450);
+  });
+});

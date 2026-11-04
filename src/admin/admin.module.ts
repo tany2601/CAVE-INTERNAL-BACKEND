@@ -24,6 +24,7 @@ import { AdminChecklistController } from './checklist/admin-checklist.controller
 import { AdminChecklistService } from './checklist/admin-checklist.service.js';
 import { AdminDiscountsController } from './discounts/admin-discounts.controller.js';
 import { AdminDiscountsService } from './discounts/admin-discounts.service.js';
+import { AdminGstController } from './gst/admin-gst.controller.js';
 import { AdminUploadsController } from './uploads/admin-uploads.controller.js';
 import { AdminUploadsService } from './uploads/admin-uploads.service.js';
 import { AdminProductsController } from './products/admin-products.controller.js';
@@ -48,6 +49,7 @@ import { RolesGuard } from '../common/guards/roles.guard.js';
     AdminUploadsController,
     AdminProductsController,
     AdminDiscountsController,
+    AdminGstController,
   ],
   providers: [
     AdminAuthService,

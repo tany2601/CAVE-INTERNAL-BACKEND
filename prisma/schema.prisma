@@ -253,6 +253,20 @@ model Session {
   isFreeVisit           Boolean       @default(false)
   isEdited              Boolean       @default(false)
   editedAt              DateTime?
+  /// GST, kept exactly as it was on the bill. A bill with an invoiceNumber is a GST tax invoice; bills from
+  /// before GST was switched on have none. CGST and SGST are always equal halves.
+  invoiceNumber         String?       @unique
+  gstin                 String?
+  gstServicesRate       Decimal       @default(0.00) @db.Decimal(5, 2)
+  gstServicesInclusive  Boolean       @default(false)
+  gstServicesTaxable    Decimal       @default(0.00) @db.Decimal(10, 2)
+  gstServicesCgst       Decimal       @default(0.00) @db.Decimal(10, 2)
+  gstServicesSgst       Decimal       @default(0.00) @db.Decimal(10, 2)
+  gstProductsRate       Decimal       @default(0.00) @db.Decimal(5, 2)
+  gstProductsInclusive  Boolean       @default(false)
+  gstProductsTaxable    Decimal       @default(0.00) @db.Decimal(10, 2)
+  gstProductsCgst       Decimal       @default(0.00) @db.Decimal(10, 2)
+  gstProductsSgst       Decimal       @default(0.00) @db.Decimal(10, 2)
   createdAt             DateTime      @default(now())
   updatedAt             DateTime      @updatedAt
 
@@ -511,6 +525,13 @@ model AppSetting {
   key       String   @id
   value     Json
   updatedAt DateTime @updatedAt
+}
+
+/// Running invoice number per financial year ("26-27"). One series for the whole GSTIN, no gaps: the number is
+/// taken inside the same transaction that closes the bill, so a bill that fails to save never uses one up.
+model InvoiceCounter {
+  fy   String @id
+  last Int    @default(0)
 }
 
 /// The discount an admin sets for one branch (Admin → Discounts). When enabled, the billing screen starts with

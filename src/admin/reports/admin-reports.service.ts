@@ -15,6 +15,7 @@ import {
   FinSession,
   FinTransaction,
   formatMinutes,
+  netSales,
   SESSION_FIN_SELECT,
 } from './finance.js';
 import { computeCommission, round2 } from '../../common/commission.util.js';
@@ -506,14 +507,15 @@ export class AdminReportsService {
       period: query.period,
       data: staff.map((u) => {
         const mine = sessions.filter((s) => s.stylistId === u.id);
-        const revenue = mine.reduce((a, s) => a + n(s.totalAmount) - n(s.tipAmount), 0);
+        // Staff revenue and commission are worked from sales without GST.
+        const revenue = mine.reduce((a, s) => a + netSales(s), 0);
         const minutes = mine.reduce(
           (a, s) => a + minutesBetween(s.startedAt ?? s.createdAt, s.closedAt),
           0,
         );
         const mtd = monthSessions
           .filter((s) => s.stylistId === u.id)
-          .reduce((a, s) => a + n(s.totalAmount) - n(s.tipAmount), 0);
+          .reduce((a, s) => a + netSales(s), 0);
         const advance = transactions
           .filter((t) => t.type === 'EMPLOYEE_ADVANCE' && t.employeeId === u.id)
           .reduce((a, t) => a + n(t.amount), 0);
