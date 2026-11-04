@@ -25,8 +25,11 @@ export interface GstConfig {
   gstin: string;
   /** Registered (legal) name printed on the invoice; empty means the branch name is used. */
   legalName: string;
+  /** Rate for services. `inclusive` is the rule for a service that is not in `inclusiveServiceIds` (a custom service). */
   services: GstSide;
   products: GstSide;
+  /** The services (Service ids) whose menu price already includes the GST. Every other service has it added on top. */
+  inclusiveServiceIds: string[];
   /** SAC / HSN codes, printed when filled in. */
   servicesCode: string;
   productsCode: string;
@@ -91,10 +94,45 @@ export function gstPart(net: number, side: GstSide): GstPart {
   };
 }
 
-/** GST for the services and the products of one bill (amounts after discount, before tip). */
-export function billGst(config: Pick<GstConfig, 'services' | 'products'>, servicesNet: number, productsNet: number): BillGst {
-  const services = gstPart(servicesNet, config.services);
-  const products = gstPart(productsNet, config.products);
+/**
+ * The services discount shared between the services whose price includes GST and those that do not, in proportion
+ * to what each costs and to the paisa, so the two nets always add up to the services total minus the discount.
+ */
+export function serviceNets(inclusiveGross: number, exclusiveGross: number, discount: number): { inclusive: number; exclusive: number } {
+  const i = toPaise(Math.max(0, inclusiveGross));
+  const e = toPaise(Math.max(0, exclusiveGross));
+  const d = Math.min(toPaise(Math.max(0, discount)), i + e);
+  if (i + e === 0) return { inclusive: 0, exclusive: 0 };
+  let di = Math.min(i, divRound(d * i, i + e));
+  let de = d - di;
+  if (de > e) {
+    de = e;
+    di = d - e;
+  }
+  return { inclusive: toRupees(i - di), exclusive: toRupees(e - de) };
+}
+
+/**
+ * GST for one bill. The services are given in two amounts (after discount, before tip): those whose price includes
+ * GST and those that have it added on top. They share one rate, and are shown together as "services".
+ */
+export function billGst(
+  config: Pick<GstConfig, 'services' | 'products'>,
+  amounts: { servicesInclusive: number; servicesExclusive: number; products: number },
+): BillGst {
+  const inc = gstPart(amounts.servicesInclusive, { rate: config.services.rate, inclusive: true });
+  const exc = gstPart(amounts.servicesExclusive, { rate: config.services.rate, inclusive: false });
+  const add = (a: number, b: number) => toRupees(toPaise(a) + toPaise(b));
+  const services: GstPart = {
+    net: add(inc.net, exc.net),
+    rate: config.services.rate,
+    inclusive: exc.net === 0 && inc.net > 0,
+    taxable: add(inc.taxable, exc.taxable),
+    cgst: add(inc.cgst, exc.cgst),
+    sgst: add(inc.sgst, exc.sgst),
+    payable: add(inc.payable, exc.payable),
+  };
+  const products = gstPart(amounts.products, config.products);
   const sum = (a: number, b: number) => toRupees(toPaise(a) + toPaise(b));
   const cgst = sum(services.cgst, products.cgst);
   const sgst = sum(services.sgst, products.sgst);
@@ -108,6 +146,16 @@ export function billGst(config: Pick<GstConfig, 'services' | 'products'>, servic
     payable: sum(services.payable, products.payable),
   };
 }
+
+/**
+ * Haircuts and beard services are the ones whose menu price includes GST until the admin says otherwise.
+ * Combos ("The Essential", "Haircut + Beard Trim") and everything else have GST added on top.
+ */
+export const isHaircutOrBeard = (name: string): boolean => {
+  const n = name.toLowerCase();
+  if (/\(|\+|combo|package|\bthe \w+/.test(n)) return false;
+  return /hair\s?cut|beard/.test(n);
+};
 
 /** The half of a total rate as printed on a bill: 5 -> "2.5", 18 -> "9". */
 export const halfRate = (rate: number): string => String(Math.round((rate / 2) * 100) / 100);
@@ -138,7 +186,8 @@ export const DEFAULT_GST: GstConfig = {
   gstin: '29AAOCC1889N1ZO',
   legalName: '',
   services: { rate: 5, inclusive: false },
-  products: { rate: 18, inclusive: true },
+  products: { rate: 18, inclusive: false },
+  inclusiveServiceIds: [],
   servicesCode: '',
   productsCode: '',
 };

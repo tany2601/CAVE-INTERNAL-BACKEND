@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { netSales } from '../admin/reports/finance.js';
-import { billGst, DEFAULT_GST, financialYear, gstPart, halfRate, invoiceNumber, isValidGstin } from './gst.js';
+import { billGst, financialYear, gstPart, halfRate, invoiceNumber, isHaircutOrBeard, isValidGstin, serviceNets } from './gst.js';
 
 const paise = (n: number) => Math.round(n * 100);
 
@@ -50,7 +50,10 @@ describe('GST inside the price (products, 18% = 9% + 9%)', () => {
 
 describe('a whole bill', () => {
   it('services added on top, products included: 3 haircuts + wash + clay, 10% off services, ₹50 off products', () => {
-    const g = billGst(DEFAULT_GST, 900, 549);
+    const g = billGst(
+      { services: { rate: 5, inclusive: false }, products: { rate: 18, inclusive: true } },
+      { servicesInclusive: 0, servicesExclusive: 900, products: 549 },
+    );
     expect(g.services).toMatchObject({ taxable: 900, cgst: 22.5, sgst: 22.5, payable: 945 });
     expect(g.products).toMatchObject({ payable: 549, taxable: 465.26, cgst: 41.87, sgst: 41.87 });
     expect(g.payable).toBe(945 + 549);
@@ -68,13 +71,13 @@ describe('a whole bill', () => {
         services: { rate: [5, 12, 18, 0][i % 4], inclusive: i % 2 === 0 },
         products: { rate: [18, 5, 28, 0][i % 4], inclusive: i % 3 !== 0 },
       };
-      const g = billGst(cfg, sv, pr);
+      const g = billGst(cfg, { servicesInclusive: i % 5 === 0 ? sv : 0, servicesExclusive: i % 5 === 0 ? 0 : sv, products: pr });
       expect(paise(g.cgst)).toBe(paise(g.sgst));
       expect(paise(g.taxable) + paise(g.cgst) + paise(g.sgst)).toBe(paise(g.payable));
       expect(paise(g.services.payable) + paise(g.products.payable)).toBe(paise(g.payable));
-      if (cfg.services.inclusive) expect(paise(g.services.payable)).toBe(paise(sv));
+      if (i % 5 === 0) expect(paise(g.services.payable)).toBe(paise(sv));
       if (cfg.products.inclusive) expect(paise(g.products.payable)).toBe(paise(pr));
-      if (!cfg.services.inclusive) expect(paise(g.services.taxable)).toBe(paise(sv));
+      if (i % 5 !== 0) expect(paise(g.services.taxable)).toBe(paise(sv));
       // never more than a paisa away from the exact tax
       const idealTax = cfg.products.inclusive ? (pr * cfg.products.rate) / (100 + cfg.products.rate) : (pr * cfg.products.rate) / 100;
       expect(Math.abs(g.products.cgst + g.products.sgst - idealTax)).toBeLessThanOrEqual(0.0101);
@@ -126,5 +129,43 @@ describe('what a bill earns the salon (for staff revenue and commission)', () =>
     expect(netSales(bill as never)).toBe(1365.26);
     // a bill from before GST is unchanged
     expect(netSales({ totalAmount: 500, tipAmount: 50 } as never)).toBe(450);
+  });
+});
+
+describe('services with and without GST in the price', () => {
+  const cfg = { services: { rate: 5, inclusive: false }, products: { rate: 18, inclusive: false } };
+
+  it('a haircut (price includes GST) and a facial (GST on top) on one bill', () => {
+    // haircut ₹300 inclusive: taxable 285.72, 7.14 + 7.14. Facial ₹1,200 on top: 60 + 30 + 30 = ₹1,260
+    const g = billGst(cfg, { servicesInclusive: 300, servicesExclusive: 1200, products: 0 });
+    expect(g.services).toMatchObject({ net: 1500, taxable: 1485.72, cgst: 37.14, sgst: 37.14, payable: 1560 });
+    expect(g.payable).toBe(1560);
+    expect(g.cgst).toBe(g.sgst);
+  });
+
+  it('shows the price as included only when every service in the bill includes it', () => {
+    expect(billGst(cfg, { servicesInclusive: 300, servicesExclusive: 0, products: 0 }).services.inclusive).toBe(true);
+    expect(billGst(cfg, { servicesInclusive: 300, servicesExclusive: 100, products: 0 }).services.inclusive).toBe(false);
+  });
+
+  it('products added on top: ₹599 + 9% + 9% = ₹706.82', () => {
+    expect(gstPart(599, { rate: 18, inclusive: false })).toMatchObject({ taxable: 599, cgst: 53.91, sgst: 53.91, payable: 706.82 });
+  });
+
+  it('shares a services discount between the two kinds to the paisa', () => {
+    expect(serviceNets(300, 1200, 150)).toEqual({ inclusive: 270, exclusive: 1080 });
+    for (const [a, b, d] of [[333.33, 100.01, 77.77], [0, 500, 50], [500, 0, 50], [1, 1, 1], [100, 100, 200]] as const) {
+      const n = serviceNets(a, b, d);
+      expect(paise(n.inclusive) + paise(n.exclusive)).toBe(paise(a) + paise(b) - paise(d));
+      expect(n.inclusive).toBeGreaterThanOrEqual(0);
+      expect(n.exclusive).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('haircuts and beard include GST by default; combos and the rest do not', () => {
+    for (const name of ['Haircut', 'Zeta Haircut', 'Hair Cut', 'Beard Trim', 'Beard Spa', 'Beard']) expect(isHaircutOrBeard(name), name).toBe(true);
+    for (const name of ['Haircut + Hair Wash & Style', 'The Essential', 'The Basic (Haircut + Beard Trim)', 'Hair Wash', 'Acne Control Facial', 'Head Massage', 'Colour']) {
+      expect(isHaircutOrBeard(name), name).toBe(false);
+    }
   });
 });

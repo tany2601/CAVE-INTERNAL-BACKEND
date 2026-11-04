@@ -6,8 +6,8 @@ import { DEFAULT_GST } from '../../common/gst.js';
 
 const reqUser = { branchId: 'b1', role: 'MANAGER' };
 const menu = [
-  { id: 'p-hc', price: 300, service: { name: 'Haircut' } },
-  { id: 'p-wash', price: 100, service: { name: 'Hair Wash' } },
+  { id: 'p-hc', price: 300, serviceId: 'svc-hc', service: { name: 'Haircut' } },
+  { id: 'p-wash', price: 100, serviceId: 'svc-wash', service: { name: 'Hair Wash' } },
 ];
 
 describe('GST on a closed bill', () => {
@@ -21,7 +21,8 @@ describe('GST on a closed bill', () => {
 
   beforeEach(() => {
     counter = 0;
-    gstConfig = { ...DEFAULT_GST };
+    // a haircut's price includes GST; a hair wash has it added on top
+    gstConfig = { ...DEFAULT_GST, inclusiveServiceIds: ['svc-hc'] };
     tx = {
       session: {
         update: vi.fn(),
@@ -47,56 +48,68 @@ describe('GST on a closed bill', () => {
   const dto = (extra: any = {}) => ({ paymentMode: 'CASH', ...extra }) as any;
   const ids = (...x: string[]) => x.map((servicePricingId) => ({ servicePricingId }));
 
-  it('services: 5% added on top. A ₹300 haircut is ₹315 (taxable 300, CGST 7.50, SGST 7.50)', async () => {
+  it('a haircut (price includes GST): the customer pays ₹300, GST is taken out of it', async () => {
     open();
     await service.closeSession(reqUser, 's1', dto({ services: ids('p-hc') }));
     expect(claimed()).toMatchObject({
       subtotal: 300,
       gstin: '29AAOCC1889N1ZO',
       gstServicesRate: 5,
-      gstServicesInclusive: false,
-      gstServicesTaxable: 300,
-      gstServicesCgst: 7.5,
-      gstServicesSgst: 7.5,
-      gstProductsTaxable: 0,
-      totalAmount: 315,
+      gstServicesInclusive: true,
+      gstServicesTaxable: 285.72,
+      gstServicesCgst: 7.14,
+      gstServicesSgst: 7.14,
+      gstInclusiveServices: ['svc-hc'],
+      totalAmount: 300,
     });
   });
 
-  it('products: 18% inside the price. A ₹599 product costs ₹599; the tax is taken out of it', async () => {
+  it('a hair wash (GST added on top): ₹100 + 2.50 + 2.50 = ₹105', async () => {
+    open();
+    await service.closeSession(reqUser, 's1', dto({ services: ids('p-wash') }));
+    expect(claimed()).toMatchObject({ gstServicesInclusive: false, gstServicesTaxable: 100, gstServicesCgst: 2.5, gstServicesSgst: 2.5, totalAmount: 105 });
+  });
+
+  it('products have GST added on top: ₹599 + 9% + 9% = ₹706.82', async () => {
     open();
     await service.closeSession(reqUser, 's1', dto({ productSales: [{ productName: 'Clay', price: 599 }] }));
     expect(claimed()).toMatchObject({
       gstProductsRate: 18,
-      gstProductsInclusive: true,
-      gstProductsTaxable: 507.62,
-      gstProductsCgst: 45.69,
-      gstProductsSgst: 45.69,
-      totalAmount: 599,
+      gstProductsInclusive: false,
+      gstProductsTaxable: 599,
+      gstProductsCgst: 53.91,
+      gstProductsSgst: 53.91,
+      totalAmount: 706.82,
     });
   });
 
-  it('tax is worked on the discounted amounts, and the tip carries none', async () => {
+  it('a custom service has GST added on top (the default for services not on the list)', async () => {
+    open();
+    await service.closeSession(reqUser, 's1', dto({ customServices: [{ name: 'Special', price: 200 }] }));
+    expect(claimed()).toMatchObject({ gstServicesTaxable: 200, gstServicesCgst: 5, totalAmount: 210 });
+  });
+
+  it('tax is worked on the discounted amounts, the discount is shared between the two kinds, and the tip carries none', async () => {
     open();
     await service.closeSession(
       reqUser,
       's1',
       dto({
-        services: ids('p-hc', 'p-hc', 'p-hc', 'p-wash'), // 1000
+        services: ids('p-hc', 'p-hc', 'p-hc', 'p-wash'), // 900 with GST inside + 100 with GST on top
         productSales: [{ productName: 'Clay', price: 599 }],
-        serviceDiscount: { type: 'PERCENTAGE', value: 10 }, // 900 after
+        serviceDiscount: { type: 'PERCENTAGE', value: 10 }, // 100: 90 off the haircuts, 10 off the wash
         productDiscount: { type: 'FIXED', value: 50 }, // 549 after
         tipAmount: 40,
       }),
     );
     expect(claimed()).toMatchObject({
-      gstServicesTaxable: 900,
-      gstServicesCgst: 22.5,
-      gstServicesSgst: 22.5,
-      gstProductsTaxable: 465.26,
-      gstProductsCgst: 41.87,
-      gstProductsSgst: 41.87,
-      totalAmount: 945 + 549 + 40,
+      gstServicesTaxable: 861.42, // 771.42 (haircuts) + 90 (wash)
+      gstServicesCgst: 21.54,
+      gstServicesSgst: 21.54,
+      gstProductsTaxable: 549,
+      gstProductsCgst: 49.41,
+      gstProductsSgst: 49.41,
+      totalAmount: 1592.32, // 904.50 services + 647.82 products + 40 tip
     });
   });
 
@@ -121,11 +134,12 @@ describe('GST on a closed bill', () => {
   });
 
   it('editing an issued invoice keeps its own rates, even if the settings changed since', async () => {
-    gstConfig = { ...DEFAULT_GST, services: { rate: 18, inclusive: true } }; // changed after the bill was issued
+    gstConfig = { ...DEFAULT_GST, services: { rate: 18, inclusive: true }, inclusiveServiceIds: ['svc-hc'] }; // changed after the bill was issued
     prisma.session.findUnique.mockResolvedValue({
       id: 's1', branchId: 'b1', status: SessionStatus.COMPLETED, isFreeVisit: false,
       invoiceNumber: 'CV/26-27/000007', gstin: '29AAOCC1889N1ZO',
-      gstServicesRate: 5, gstServicesInclusive: false, gstProductsRate: 18, gstProductsInclusive: true,
+      gstServicesRate: 5, gstServicesInclusive: false, gstProductsRate: 18, gstProductsInclusive: false,
+      gstInclusiveServices: [], // when it was issued, haircuts had GST added on top
     });
     await service.editSession(reqUser, 's1', dto({ services: ids('p-hc', 'p-hc') }));
     const data = tx.session.update.mock.calls.at(-1)[0].data;
@@ -143,11 +157,11 @@ describe('GST on a closed bill', () => {
 
   it('refuses a bill when the total on the screen is not the total the server works out', async () => {
     open();
-    // the screen was showing ₹300 (no GST) while the server now adds 5%
-    await expect(service.closeSession(reqUser, 's1', dto({ services: ids('p-hc'), expectedTotal: 300 }))).rejects.toThrow(ConflictException);
+    // the screen was showing ₹100 (no GST) while the server adds 5% to a hair wash
+    await expect(service.closeSession(reqUser, 's1', dto({ services: ids('p-wash'), expectedTotal: 100 }))).rejects.toThrow(ConflictException);
     expect(tx.session.updateMany).not.toHaveBeenCalled();
     expect(tx.invoiceCounter.upsert).not.toHaveBeenCalled();
-    await service.closeSession(reqUser, 's1', dto({ services: ids('p-hc'), expectedTotal: 315 }));
-    expect(claimed().totalAmount).toBe(315);
+    await service.closeSession(reqUser, 's1', dto({ services: ids('p-wash'), expectedTotal: 105 }));
+    expect(claimed().totalAmount).toBe(105);
   });
 });

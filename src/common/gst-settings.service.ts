@@ -1,6 +1,6 @@
 import { Global, Injectable, Module } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { DEFAULT_GST, GstConfig, isValidGstin } from './gst.js';
+import { DEFAULT_GST, GstConfig, isHaircutOrBeard, isValidGstin } from './gst.js';
 
 const KEY = 'gst';
 
@@ -26,6 +26,9 @@ export function cleanGst(v?: Partial<GstConfig> | null): GstConfig {
       rate: rate(v?.products?.rate, DEFAULT_GST.products.rate),
       inclusive: typeof v?.products?.inclusive === 'boolean' ? v.products.inclusive : DEFAULT_GST.products.inclusive,
     },
+    inclusiveServiceIds: Array.isArray(v?.inclusiveServiceIds)
+      ? [...new Set(v.inclusiveServiceIds.filter((x): x is string => typeof x === 'string' && x.length > 0 && x.length <= 64))]
+      : [],
     servicesCode: text(v?.servicesCode, 8),
     productsCode: text(v?.productsCode, 8),
   };
@@ -38,7 +41,14 @@ export class GstSettings {
 
   async get(): Promise<GstConfig> {
     const row = await this.prisma.appSetting.findUnique({ where: { key: KEY } });
-    return cleanGst(row?.value as Partial<GstConfig> | undefined);
+    const saved = row?.value as Partial<GstConfig> | undefined;
+    const clean = cleanGst(saved);
+    // Before the admin has chosen, haircuts and beard services are the ones that include GST.
+    if (!Array.isArray(saved?.inclusiveServiceIds)) {
+      const services = await this.prisma.service.findMany({ where: { isActive: true }, select: { id: true, name: true } });
+      clean.inclusiveServiceIds = services.filter((s) => isHaircutOrBeard(s.name)).map((s) => s.id);
+    }
+    return clean;
   }
 
   async save(value: GstConfig): Promise<GstConfig> {

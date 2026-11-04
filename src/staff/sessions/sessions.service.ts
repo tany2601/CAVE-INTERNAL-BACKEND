@@ -15,11 +15,11 @@ import { AssignStylistDto } from './dto/assign-stylist.dto.js';
 import { freeHaircutIndex, isFreeVisitNext } from '../../common/loyalty.js';
 import { BillDiscount, billDiscount, wholeBillDiscount } from '../../common/discount.js';
 import { WhatsappService } from '../../whatsapp/whatsapp.service.js';
-import { BillGst, billGst, financialYear, GstConfig, invoiceNumber as makeInvoiceNumber } from '../../common/gst.js';
+import { BillGst, billGst, financialYear, GstConfig, invoiceNumber as makeInvoiceNumber, serviceNets } from '../../common/gst.js';
 import { GstSettings } from '../../common/gst-settings.service.js';
 
 /** The GST terms a bill is worked out under: today's settings for a new bill, the bill's own for an edit. */
-type GstTerms = Pick<GstConfig, 'gstin' | 'services' | 'products'>;
+type GstTerms = Pick<GstConfig, 'gstin' | 'services' | 'products' | 'inclusiveServiceIds'>;
 
 /** Another request closed this bill first. */
 class AlreadyClosed extends Error {}
@@ -41,7 +41,9 @@ export class SessionsService {
   /** GST terms for a new bill, or null when GST is switched off. */
   private async currentGst(): Promise<GstTerms | null> {
     const cfg = await this.gstSettings?.get();
-    return cfg?.enabled ? { gstin: cfg.gstin, services: cfg.services, products: cfg.products } : null;
+    return cfg?.enabled
+      ? { gstin: cfg.gstin, services: cfg.services, products: cfg.products, inclusiveServiceIds: cfg.inclusiveServiceIds }
+      : null;
   }
 
   /** The terms an issued invoice was made under (kept on the bill), so editing it never changes its rates. */
@@ -51,6 +53,7 @@ export class SessionsService {
       gstin: s.gstin,
       services: { rate: Number(s.gstServicesRate), inclusive: !!s.gstServicesInclusive },
       products: { rate: Number(s.gstProductsRate), inclusive: !!s.gstProductsInclusive },
+      inclusiveServiceIds: Array.isArray(s.gstInclusiveServices) ? s.gstInclusiveServices : [],
     };
   }
 
@@ -58,8 +61,10 @@ export class SessionsService {
   private gstColumns(gst: BillGst | null, terms: GstTerms | null) {
     return {
       gstin: terms?.gstin ?? null,
+      gstInclusiveServices: terms?.inclusiveServiceIds ?? [],
       gstServicesRate: terms ? terms.services.rate : 0,
-      gstServicesInclusive: terms ? terms.services.inclusive : false,
+      // True when every service on the bill had its GST inside the price (used only for the label on the bill).
+      gstServicesInclusive: gst?.services.inclusive ?? false,
       gstServicesTaxable: gst?.services.taxable ?? 0,
       gstServicesCgst: gst?.services.cgst ?? 0,
       gstServicesSgst: gst?.services.sgst ?? 0,
@@ -148,6 +153,8 @@ export class SessionsService {
     return {
       services,
       products,
+      /** The services whose price included the GST on this bill (the rest had it added on top). */
+      inclusiveServiceIds: Array.isArray(session.gstInclusiveServices) ? session.gstInclusiveServices : [],
       taxable: this.round2(services.taxable + products.taxable),
       cgst,
       sgst,
@@ -607,6 +614,8 @@ export class SessionsService {
       serviceName: string;
       price: number;
       isCustom: boolean;
+      /** Which service it is (not the branch's price row), to know whether its price includes GST. */
+      serviceId: string;
     }> = [];
 
     if (hasServices && dto.services) {
@@ -643,6 +652,7 @@ export class SessionsService {
           serviceName: record.service.name,
           price: record.price,
           isCustom: false,
+          serviceId: record.serviceId,
         });
       }
     }
@@ -722,13 +732,21 @@ export class SessionsService {
     const afterDiscountSubtotal = this.round2(preDiscountSubtotal - discountAmount);
     // GST is worked from the services and the products after their own discounts. The tip is the customer's
     // gift, not part of the price, so it carries no GST.
-    const gst = terms
-      ? billGst(
-          terms,
-          this.round2(servicesSub - discount.services.amount),
-          this.round2(productsSub - discount.products.amount),
-        )
-      : null;
+    // Services whose price includes GST (haircuts and beard unless the admin chose otherwise) and the rest, which
+    // have it added on top, share the services discount in proportion.
+    let gst: BillGst | null = null;
+    if (terms) {
+      const includes = (i: { serviceId?: string }) =>
+        i.serviceId ? terms.inclusiveServiceIds.includes(i.serviceId) : terms.services.inclusive;
+      const all = [...menuServiceItems, ...customServiceItems] as Array<{ serviceId?: string; price: number }>;
+      const inclusiveGross = this.round2(all.filter(includes).reduce((a, i) => a + i.price, 0));
+      const nets = serviceNets(inclusiveGross, this.round2(servicesSub - inclusiveGross), discount.services.amount);
+      gst = billGst(terms, {
+        servicesInclusive: nets.inclusive,
+        servicesExclusive: nets.exclusive,
+        products: this.round2(productsSub - discount.products.amount),
+      });
+    }
     const totalAmount = this.round2((gst ? gst.payable : afterDiscountSubtotal) + tipAmount);
 
     return {
@@ -1023,6 +1041,34 @@ export class SessionsService {
       message: 'Session updated successfully',
       session: this.formatSessionOutput(updated),
     };
+  }
+
+  /**
+   * Throws away a bill that was started and then cancelled before it was billed. Nothing is kept: no session, no
+   * line items. Only an open session of the caller's own branch that is not billed, has not counted towards
+   * loyalty and was started within the last hour, so a real customer's session can't be removed by mistake.
+   * (A billed session is voided with cancelSession instead, which keeps it for the audit trail.)
+   */
+  async discardSession(reqUser: any, sessionId: string) {
+    const { branchId } = await this.resolveBranchContext(reqUser);
+    const session = await this.prisma.session.findUnique({ where: { id: sessionId } });
+    if (!session) return { message: 'Nothing to discard.' }; // already gone
+    if (session.branchId !== branchId) {
+      throw new ForbiddenException('Access denied: Cannot modify sessions belonging to another branch.');
+    }
+    const fresh = Date.now() - new Date(session.createdAt).getTime() < 60 * 60 * 1000;
+    if (session.status !== SessionStatus.ACTIVE || session.isLoyaltyCounted || !fresh) {
+      throw new BadRequestException('Only a bill that was just started and not billed can be discarded.');
+    }
+    const removed = await this.prisma.session.deleteMany({
+      where: { id: sessionId, status: SessionStatus.ACTIVE, isLoyaltyCounted: false },
+    });
+    // A customer that was added only for this bill (no other visit) goes too, so nothing about the cancelled
+    // bill is left behind. A returning customer has other sessions and stays.
+    if (removed.count > 0 && session.customerId) {
+      await this.prisma.customer.deleteMany({ where: { id: session.customerId, sessions: { none: {} } } });
+    }
+    return { message: 'Bill discarded.' };
   }
 
   /** Voids a session (kept for audit as CANCELLED) and rolls back its loyalty credit. */

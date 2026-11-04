@@ -329,9 +329,13 @@ export class AdminReportsService {
         ...(branchId ? { branchId } : {}),
       },
       select: {
+        id: true,
         customerId: true,
         branchId: true,
+        startedAt: true,
+        createdAt: true,
         closedAt: true,
+        invoiceNumber: true,
         totalAmount: true,
         tipAmount: true,
         services: { select: { serviceName: true } },
@@ -356,6 +360,16 @@ export class AdminReportsService {
         firstVisit: Date | null;
         lastBranchId: string;
         services: Map<string, number>;
+        /** Every visit with when the session started and when the bill was made. */
+        visitLog: {
+          id: string;
+          startedAt: Date;
+          billedAt: Date | null;
+          branch: string;
+          amount: number;
+          invoiceNumber: string | null;
+          services: string;
+        }[];
       }
     >();
     for (const c of customers)
@@ -369,6 +383,7 @@ export class AdminReportsService {
         firstVisit: null,
         lastBranchId: '',
         services: new Map(),
+        visitLog: [],
       });
     for (const s of sessions) {
       const p = profiles.get(s.customerId as string);
@@ -380,6 +395,15 @@ export class AdminReportsService {
       p.lastVisit = s.closedAt;
       p.lastBranchId = s.branchId;
       for (const svc of s.services) p.services.set(svc.serviceName, (p.services.get(svc.serviceName) ?? 0) + 1);
+      p.visitLog.push({
+        id: s.id,
+        startedAt: s.startedAt ?? s.createdAt,
+        billedAt: s.closedAt,
+        branch: branchName.get(s.branchId) ?? '',
+        amount: round2(n(s.totalAmount) - n(s.tipAmount)),
+        invoiceNumber: s.invoiceNumber ?? null,
+        services: [...new Set(s.services.map((x) => x.serviceName))].join(', '),
+      });
     }
     return { profiles: [...profiles.values()], branchName };
   }
@@ -427,6 +451,8 @@ export class AdminReportsService {
           [...p.services.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '—',
         lastVisit: p.lastVisit,
         branch: branchName.get(p.lastBranchId) ?? '',
+        // The most recent visits first: when each session started and when its bill was generated.
+        visitLog: [...p.visitLog].reverse().slice(0, 20),
       })),
     };
   }

@@ -34,6 +34,7 @@ export class AdminGstController {
       legalName: dto.legalName ?? '',
       services: dto.services,
       products: dto.products,
+      inclusiveServiceIds: dto.inclusiveServiceIds,
       servicesCode: dto.servicesCode ?? '',
       productsCode: dto.productsCode ?? '',
     });

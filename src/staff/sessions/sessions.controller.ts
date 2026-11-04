@@ -305,6 +305,24 @@ export class SessionsController {
     return this.sessionsService.editSession(req.user, id, dto);
   }
 
+  @Post(':id/discard')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('STYLIST', 'MANAGER')
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Throw away a bill that was just started and never closed',
+    description:
+      'For a quick bill that was cancelled before it was billed: the session is removed completely (nothing is kept). Only an open session of your own branch that has no bill and was started within the last hour.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID of the open session' })
+  async discardSession(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: any,
+  ) {
+    return this.sessionsService.discardSession(req.user, id);
+  }
+
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard, RolesGuard)

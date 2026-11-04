@@ -257,6 +257,8 @@ model Session {
   /// before GST was switched on have none. CGST and SGST are always equal halves.
   invoiceNumber         String?       @unique
   gstin                 String?
+  /// The services (Service ids) whose price included the GST on this bill; the rest had it added on top.
+  gstInclusiveServices  String[]      @default([])
   gstServicesRate       Decimal       @default(0.00) @db.Decimal(5, 2)
   gstServicesInclusive  Boolean       @default(false)
   gstServicesTaxable    Decimal       @default(0.00) @db.Decimal(10, 2)

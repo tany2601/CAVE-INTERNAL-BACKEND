@@ -1,6 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
-import { IsBoolean, IsNumber, IsOptional, IsString, Matches, Max, MaxLength, Min, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsNumber, IsOptional, IsString, Matches, Max, MaxLength, Min, ValidateNested } from 'class-validator';
 
 export class GstSideDto {
   @ApiProperty({ example: 5, description: 'Total GST rate in percent (CGST and SGST are half each)' })
@@ -44,6 +44,12 @@ export class SaveGstDto {
   @ValidateNested()
   @Type(() => GstSideDto)
   products!: GstSideDto;
+
+  @ApiProperty({ type: [String], description: 'Services (ids) whose menu price already includes the GST; every other service has it added on top' })
+  @IsArray()
+  @ArrayMaxSize(1000)
+  @IsString({ each: true })
+  inclusiveServiceIds!: string[];
 
   @ApiProperty({ example: '999721', required: false, description: 'SAC code for services, printed on the bill when filled in' })
   @IsOptional()
