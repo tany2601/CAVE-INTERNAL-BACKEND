@@ -24,6 +24,7 @@ export interface FinSession {
   gstServicesTaxable?: unknown;
   gstServicesCgst?: unknown;
   gstServicesSgst?: unknown;
+  gstServicesExempt?: unknown;
   gstProductsTaxable?: unknown;
   gstProductsCgst?: unknown;
   gstProductsSgst?: unknown;
@@ -68,6 +69,7 @@ export const SESSION_FIN_SELECT = {
   gstServicesTaxable: true,
   gstServicesCgst: true,
   gstServicesSgst: true,
+  gstServicesExempt: true,
   gstProductsTaxable: true,
   gstProductsCgst: true,
   gstProductsSgst: true,
@@ -110,6 +112,8 @@ export interface Finance {
   gstCgst: number;
   gstSgst: number;
   gstTotal: number;
+  /** Services charged with no GST (not in the taxable value above). */
+  gstExempt: number;
   cashCollected: number;
   gpayCollected: number;
   expensesCash: number;
@@ -136,6 +140,7 @@ export const emptyFinance = (): Finance => ({
   gstCgst: 0,
   gstSgst: 0,
   gstTotal: 0,
+  gstExempt: 0,
   cashCollected: 0,
   gpayCollected: 0,
   expensesCash: 0,
@@ -175,6 +180,7 @@ export function aggregateFinance(
     f.gstTaxable += n(s.gstServicesTaxable) + n(s.gstProductsTaxable);
     f.gstCgst += n(s.gstServicesCgst) + n(s.gstProductsCgst);
     f.gstSgst += n(s.gstServicesSgst) + n(s.gstProductsSgst);
+    f.gstExempt += n(s.gstServicesExempt);
     for (const p of s.products) {
       if (p.paymentMode === PaymentMode.GPAY) f.productSalesGpay += n(p.price) * productKeep;
       else f.productSalesCash += n(p.price) * productKeep;

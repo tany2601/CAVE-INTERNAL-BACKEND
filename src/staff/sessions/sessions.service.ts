@@ -15,11 +15,11 @@ import { AssignStylistDto } from './dto/assign-stylist.dto.js';
 import { freeHaircutIndex, isFreeVisitNext } from '../../common/loyalty.js';
 import { BillDiscount, billDiscount, wholeBillDiscount } from '../../common/discount.js';
 import { WhatsappService } from '../../whatsapp/whatsapp.service.js';
-import { BillGst, billGst, financialYear, GstConfig, invoiceNumber as makeInvoiceNumber, serviceNets } from '../../common/gst.js';
+import { BillGst, billGst, financialYear, GstConfig, invoiceNumber as makeInvoiceNumber, GstMode, modeOfService, serviceBuckets } from '../../common/gst.js';
 import { GstSettings } from '../../common/gst-settings.service.js';
 
 /** The GST terms a bill is worked out under: today's settings for a new bill, the bill's own for an edit. */
-type GstTerms = Pick<GstConfig, 'gstin' | 'services' | 'products' | 'inclusiveServiceIds'>;
+type GstTerms = Pick<GstConfig, 'gstin' | 'services' | 'products' | 'serviceModes'>;
 
 /** Another request closed this bill first. */
 class AlreadyClosed extends Error {}
@@ -29,6 +29,10 @@ class FreeVisitChanged extends Error {
     super('free visit changed');
   }
 }
+
+/** The service ids that have a given mode, for the lists kept on a bill. */
+const idsWithMode = (terms: GstTerms | null, mode: GstMode): string[] =>
+  terms ? Object.entries(terms.serviceModes).filter(([, m]) => m === mode).map(([id]) => id) : [];
 
 @Injectable()
 export class SessionsService {
@@ -42,7 +46,7 @@ export class SessionsService {
   private async currentGst(branchId: string): Promise<GstTerms | null> {
     const cfg = await this.gstSettings?.getForBranch(branchId);
     return cfg?.enabled
-      ? { gstin: cfg.gstin, services: cfg.services, products: cfg.products, inclusiveServiceIds: cfg.inclusiveServiceIds }
+      ? { gstin: cfg.gstin, services: cfg.services, products: cfg.products, serviceModes: cfg.serviceModes }
       : null;
   }
 
@@ -53,7 +57,11 @@ export class SessionsService {
       gstin: s.gstin,
       services: { rate: Number(s.gstServicesRate), inclusive: !!s.gstServicesInclusive },
       products: { rate: Number(s.gstProductsRate), inclusive: !!s.gstProductsInclusive },
-      inclusiveServiceIds: Array.isArray(s.gstInclusiveServices) ? s.gstInclusiveServices : [],
+      // The modes the bill was issued with: services listed as inside the price or with no GST; the rest were on top.
+      serviceModes: {
+        ...Object.fromEntries((Array.isArray(s.gstInclusiveServices) ? s.gstInclusiveServices : []).map((id: string) => [id, 'INCLUDED_IN_PRICE'])),
+        ...Object.fromEntries((Array.isArray(s.gstExemptServices) ? s.gstExemptServices : []).map((id: string) => [id, 'NO_GST'])),
+      } as Record<string, GstMode>,
     };
   }
 
@@ -61,7 +69,9 @@ export class SessionsService {
   private gstColumns(gst: BillGst | null, terms: GstTerms | null) {
     return {
       gstin: terms?.gstin ?? null,
-      gstInclusiveServices: terms?.inclusiveServiceIds ?? [],
+      gstInclusiveServices: idsWithMode(terms, 'INCLUDED_IN_PRICE'),
+      gstExemptServices: idsWithMode(terms, 'NO_GST'),
+      gstServicesExempt: gst?.services.exempt ?? 0,
       gstServicesRate: terms ? terms.services.rate : 0,
       // True when every service on the bill had its GST inside the price (used only for the label on the bill).
       gstServicesInclusive: gst?.services.inclusive ?? false,
@@ -146,15 +156,16 @@ export class SessionsService {
       cgst: Number(session[`gst${side}Cgst`]),
       sgst: Number(session[`gst${side}Sgst`]),
     });
-    const services = part('Services');
+    const services = { ...part('Services'), exempt: Number(session.gstServicesExempt ?? 0) };
     const products = part('Products');
     const cgst = this.round2(services.cgst + products.cgst);
     const sgst = this.round2(services.sgst + products.sgst);
     return {
       services,
       products,
-      /** The services whose price included the GST on this bill (the rest had it added on top). */
+      /** The services whose price included the GST on this bill, and those that had no GST (the rest had it added on top). */
       inclusiveServiceIds: Array.isArray(session.gstInclusiveServices) ? session.gstInclusiveServices : [],
+      exemptServiceIds: Array.isArray(session.gstExemptServices) ? session.gstExemptServices : [],
       taxable: this.round2(services.taxable + products.taxable),
       cgst,
       sgst,
@@ -735,18 +746,27 @@ export class SessionsService {
     const afterDiscountSubtotal = this.round2(preDiscountSubtotal - discountAmount);
     // GST is worked from the services and the products after their own discounts. The tip is the customer's
     // gift, not part of the price, so it carries no GST.
-    // Services whose price includes GST (haircuts and beard unless the admin chose otherwise) and the rest, which
-    // have it added on top, share the services discount in proportion.
+    // Each service has its own GST mode: price includes GST, GST on top, or no GST. The services discount is shared
+    // between the three kinds in proportion, to the paisa. Services with no GST are charged as they are and never
+    // count as taxable value.
     let gst: BillGst | null = null;
     if (terms) {
-      const includes = (i: { serviceId?: string }) =>
-        i.serviceId ? terms.inclusiveServiceIds.includes(i.serviceId) : terms.services.inclusive;
       const all = [...menuServiceItems, ...customServiceItems] as Array<{ serviceId?: string; price: number }>;
-      const inclusiveGross = this.round2(all.filter(includes).reduce((a, i) => a + i.price, 0));
-      const nets = serviceNets(inclusiveGross, this.round2(servicesSub - inclusiveGross), discount.services.amount);
+      const gross = { inclusive: 0, exclusive: 0, exempt: 0 };
+      for (const item of all) {
+        const mode = modeOfService(terms.serviceModes, item.serviceId);
+        if (mode === 'INCLUDED_IN_PRICE') gross.inclusive += item.price;
+        else if (mode === 'NO_GST') gross.exempt += item.price;
+        else gross.exclusive += item.price;
+      }
+      const nets = serviceBuckets(
+        { inclusive: this.round2(gross.inclusive), exclusive: this.round2(gross.exclusive), exempt: this.round2(gross.exempt) },
+        discount.services.amount,
+      );
       gst = billGst(terms, {
         servicesInclusive: nets.inclusive,
         servicesExclusive: nets.exclusive,
+        servicesExempt: nets.exempt,
         products: this.round2(productsSub - discount.products.amount),
       });
     }

@@ -8,6 +8,7 @@ const reqUser = { branchId: 'b1', role: 'MANAGER' };
 const menu = [
   { id: 'p-hc', price: 300, serviceId: 'svc-hc', service: { name: 'Haircut' } },
   { id: 'p-wash', price: 100, serviceId: 'svc-wash', service: { name: 'Hair Wash' } },
+  { id: 'p-nogst', price: 150, serviceId: 'svc-nogst', service: { name: 'Haircut + Hair Wash & Style' } },
 ];
 
 describe('GST on a closed bill', () => {
@@ -22,7 +23,7 @@ describe('GST on a closed bill', () => {
   beforeEach(() => {
     counter = 0;
     // a haircut's price includes GST; a hair wash has it added on top
-    gstConfig = { ...DEFAULT_GST, inclusiveServiceIds: ['svc-hc'] };
+    gstConfig = { ...DEFAULT_GST, serviceModes: { 'svc-hc': 'INCLUDED_IN_PRICE', 'svc-nogst': 'NO_GST' } };
     tx = {
       session: {
         update: vi.fn(),
@@ -60,6 +61,8 @@ describe('GST on a closed bill', () => {
       gstServicesCgst: 7.14,
       gstServicesSgst: 7.14,
       gstInclusiveServices: ['svc-hc'],
+      gstExemptServices: ['svc-nogst'],
+      gstServicesExempt: 0,
       totalAmount: 300,
     });
   });
@@ -113,6 +116,50 @@ describe('GST on a closed bill', () => {
     });
   });
 
+  it('a service set to No GST: ₹150 charged as it is, not in the taxable value, next to a taxed service', async () => {
+    open();
+    await service.closeSession(reqUser, 's1', dto({ services: ids('p-nogst', 'p-wash') }));
+    expect(claimed()).toMatchObject({
+      subtotal: 250,
+      gstServicesTaxable: 100, // the hair wash only
+      gstServicesCgst: 2.5,
+      gstServicesSgst: 2.5,
+      gstServicesExempt: 150,
+      gstExemptServices: ['svc-nogst'],
+      totalAmount: 255, // 150 (no GST) + 100 + 5 GST
+    });
+  });
+
+  it('only No GST services: no tax at all, and the bill is still a numbered invoice', async () => {
+    open();
+    await service.closeSession(reqUser, 's1', dto({ services: ids('p-nogst') }));
+    expect(claimed()).toMatchObject({ gstServicesTaxable: 0, gstServicesCgst: 0, gstServicesSgst: 0, gstServicesExempt: 150, totalAmount: 150 });
+  });
+
+  it('a discount is shared with the No GST services too, and the tip and products add on', async () => {
+    open();
+    await service.closeSession(
+      reqUser,
+      's1',
+      dto({
+        services: ids('p-nogst', 'p-wash'), // 150 no GST + 100 on top
+        productSales: [{ productName: 'Clay', price: 100 }],
+        serviceDiscount: { type: 'PERCENTAGE', value: 10 }, // 25 off: 15 and 10
+        tipAmount: 20,
+      }),
+    );
+    expect(claimed()).toMatchObject({
+      gstServicesExempt: 135,
+      gstServicesTaxable: 90,
+      gstServicesCgst: 2.25,
+      gstServicesSgst: 2.25,
+      gstProductsTaxable: 100,
+      gstProductsCgst: 9,
+      gstProductsSgst: 9,
+      totalAmount: 367.5, // 135 no GST + 94.50 (90 + 4.50 GST) + 118 (100 + 18 GST) + 20 tip
+    });
+  });
+
   it('gives the bill the next invoice number of the financial year, inside the same transaction', async () => {
     open();
     await service.closeSession(reqUser, 's1', dto({ services: ids('p-hc') }));
@@ -134,12 +181,13 @@ describe('GST on a closed bill', () => {
   });
 
   it('editing an issued invoice keeps its own rates, even if the settings changed since', async () => {
-    gstConfig = { ...DEFAULT_GST, services: { rate: 18, inclusive: true }, inclusiveServiceIds: ['svc-hc'] }; // changed after the bill was issued
+    gstConfig = { ...DEFAULT_GST, services: { rate: 18, inclusive: true }, serviceModes: { 'svc-hc': 'INCLUDED_IN_PRICE' } }; // changed after the bill was issued
     prisma.session.findUnique.mockResolvedValue({
       id: 's1', branchId: 'b1', status: SessionStatus.COMPLETED, isFreeVisit: false,
       invoiceNumber: 'CV/26-27/000007', gstin: '29AAOCC1889N1ZO',
       gstServicesRate: 5, gstServicesInclusive: false, gstProductsRate: 18, gstProductsInclusive: false,
       gstInclusiveServices: [], // when it was issued, haircuts had GST added on top
+      gstExemptServices: [],
     });
     await service.editSession(reqUser, 's1', dto({ services: ids('p-hc', 'p-hc') }));
     const data = tx.session.update.mock.calls.at(-1)[0].data;

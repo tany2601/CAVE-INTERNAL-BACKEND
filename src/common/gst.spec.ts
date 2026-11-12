@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { netSales } from '../admin/reports/finance.js';
-import { billGst, financialYear, gstPart, halfRate, invoiceNumber, isHaircutOrBeard, isValidGstin, serviceNets } from './gst.js';
+import { billGst, financialYear, gstPart, halfRate, invoiceNumber, isHaircutOrBeard, isValidGstin, modeOfService, serviceBuckets } from './gst.js';
 
 const paise = (n: number) => Math.round(n * 100);
 
@@ -152,14 +152,35 @@ describe('services with and without GST in the price', () => {
     expect(gstPart(599, { rate: 18, inclusive: false })).toMatchObject({ taxable: 599, cgst: 53.91, sgst: 53.91, payable: 706.82 });
   });
 
-  it('shares a services discount between the two kinds to the paisa', () => {
-    expect(serviceNets(300, 1200, 150)).toEqual({ inclusive: 270, exclusive: 1080 });
-    for (const [a, b, d] of [[333.33, 100.01, 77.77], [0, 500, 50], [500, 0, 50], [1, 1, 1], [100, 100, 200]] as const) {
-      const n = serviceNets(a, b, d);
-      expect(paise(n.inclusive) + paise(n.exclusive)).toBe(paise(a) + paise(b) - paise(d));
-      expect(n.inclusive).toBeGreaterThanOrEqual(0);
-      expect(n.exclusive).toBeGreaterThanOrEqual(0);
+  it('shares a services discount between the three kinds to the paisa, never below zero', () => {
+    expect(serviceBuckets({ inclusive: 300, exclusive: 1200, exempt: 0 }, 150)).toEqual({ inclusive: 270, exclusive: 1080, exempt: 0 });
+    expect(serviceBuckets({ inclusive: 300, exclusive: 1200, exempt: 150 }, 165)).toEqual({ inclusive: 270, exclusive: 1080, exempt: 135 });
+    const cases: [number, number, number, number][] = [[333.33, 100.01, 77.77, 61.1], [0, 500, 50, 0], [500, 0, 0, 50], [1, 1, 1, 2], [100, 100, 100, 300], [0.01, 0.01, 0.01, 0.02], [150, 0, 0, 0.01]];
+    for (const [a, b, c, d] of cases) {
+      const n = serviceBuckets({ inclusive: a, exclusive: b, exempt: c }, d);
+      expect(paise(n.inclusive) + paise(n.exclusive) + paise(n.exempt)).toBe(paise(a) + paise(b) + paise(c) - paise(d));
+      expect(Math.min(n.inclusive, n.exclusive, n.exempt)).toBeGreaterThanOrEqual(0);
     }
+  });
+
+  it('a service with NO_GST is charged as it is and never counts as taxable value', () => {
+    // Haircut + Hair Wash & Style at ₹150 (NO_GST) with a ₹1,200 facial (GST on top)
+    const g = billGst(cfg, { servicesInclusive: 0, servicesExclusive: 1200, servicesExempt: 150, products: 0 });
+    expect(g.services).toMatchObject({ taxable: 1200, cgst: 30, sgst: 30, exempt: 150, net: 1350, payable: 1410 });
+    expect(g.taxable).toBe(1200); // the ₹150 is not in it
+    expect(g.payable).toBe(1410);
+    // only no-GST services: nothing taxable, no tax, the price is the total
+    const only = billGst(cfg, { servicesInclusive: 0, servicesExclusive: 0, servicesExempt: 150, products: 0 });
+    expect(only).toMatchObject({ taxable: 0, cgst: 0, sgst: 0, tax: 0, payable: 150 });
+    expect(only.services.exempt).toBe(150);
+  });
+
+  it('a service with no mode set is ADD_ON_TOP, and a custom service (no id) too', () => {
+    const modes = { a: 'NO_GST', b: 'INCLUDED_IN_PRICE' } as const;
+    expect(modeOfService(modes, 'a')).toBe('NO_GST');
+    expect(modeOfService(modes, 'b')).toBe('INCLUDED_IN_PRICE');
+    expect(modeOfService(modes, 'c')).toBe('ADD_ON_TOP');
+    expect(modeOfService(modes, undefined)).toBe('ADD_ON_TOP');
   });
 
   it('haircuts and beard include GST by default; combos and the rest do not', () => {

@@ -20,16 +20,25 @@ export interface GstSide {
   inclusive: boolean;
 }
 
+/**
+ * How GST works for one service:
+ *  · ADD_ON_TOP: the menu price is the taxable value; GST is added to it.
+ *  · INCLUDED_IN_PRICE: the customer pays the menu price and the GST is taken out of it.
+ *  · NO_GST: no GST at all. The price is charged as it is and is not part of any taxable value.
+ */
+export type GstMode = 'ADD_ON_TOP' | 'INCLUDED_IN_PRICE' | 'NO_GST';
+export const GST_MODES: GstMode[] = ['ADD_ON_TOP', 'INCLUDED_IN_PRICE', 'NO_GST'];
+
 export interface GstConfig {
   enabled: boolean;
   gstin: string;
   /** Registered (legal) name printed on the invoice; empty means the branch name is used. */
   legalName: string;
-  /** Rate for services. `inclusive` is the rule for a service that is not in `inclusiveServiceIds` (a custom service). */
+  /** Rate for services (one rate for every service that has GST). */
   services: GstSide;
   products: GstSide;
-  /** The services (Service ids) whose menu price already includes the GST. Every other service has it added on top. */
-  inclusiveServiceIds: string[];
+  /** How GST works for each service (by Service id). A service that is not listed, and a custom service, is ADD_ON_TOP. */
+  serviceModes: Record<string, GstMode>;
   /** SAC / HSN codes, printed when filled in. */
   servicesCode: string;
   productsCode: string;
@@ -43,8 +52,10 @@ export interface GstPart {
   taxable: number;
   cgst: number;
   sgst: number;
-  /** What the customer pays for this part: taxable + CGST + SGST. */
+  /** What the customer pays for this part: taxable + CGST + SGST (+ any amount that carries no GST). */
   payable: number;
+  /** Services only: what was charged on services with NO_GST (after discount). It is not part of `taxable`. */
+  exempt: number;
 }
 
 export interface BillGst {
@@ -91,46 +102,63 @@ export function gstPart(net: number, side: GstSide): GstPart {
     cgst: toRupees(half),
     sgst: toRupees(half),
     payable: toRupees(payable),
+    exempt: 0,
   };
 }
 
+/** The GST mode of a service on a bill (a custom service has no id, and has GST added on top). */
+export const modeOfService = (modes: Record<string, GstMode>, serviceId?: string | null): GstMode =>
+  (serviceId && modes[serviceId]) || 'ADD_ON_TOP';
+
 /**
- * The services discount shared between the services whose price includes GST and those that do not, in proportion
- * to what each costs and to the paisa, so the two nets always add up to the services total minus the discount.
+ * The services discount shared between the three kinds of service (GST inside the price, GST on top, no GST) in
+ * proportion to what each costs and to the paisa, so the three nets always add up to the services total minus
+ * the discount and none goes below zero.
  */
-export function serviceNets(inclusiveGross: number, exclusiveGross: number, discount: number): { inclusive: number; exclusive: number } {
-  const i = toPaise(Math.max(0, inclusiveGross));
-  const e = toPaise(Math.max(0, exclusiveGross));
-  const d = Math.min(toPaise(Math.max(0, discount)), i + e);
-  if (i + e === 0) return { inclusive: 0, exclusive: 0 };
-  let di = Math.min(i, divRound(d * i, i + e));
-  let de = d - di;
-  if (de > e) {
-    de = e;
-    di = d - e;
+export function serviceBuckets(
+  gross: { inclusive: number; exclusive: number; exempt: number },
+  discount: number,
+): { inclusive: number; exclusive: number; exempt: number } {
+  const w = [toPaise(Math.max(0, gross.inclusive)), toPaise(Math.max(0, gross.exclusive)), toPaise(Math.max(0, gross.exempt))];
+  const total = w[0] + w[1] + w[2];
+  if (total === 0) return { inclusive: 0, exclusive: 0, exempt: 0 };
+  const d = Math.min(toPaise(Math.max(0, discount)), total);
+  // Whole paise first, then the leftover paise go to the largest fractions (ties: inclusive, exclusive, exempt).
+  const base = w.map((x) => Math.floor((d * x) / total));
+  const frac = w.map((x) => (d * x) % total);
+  let left = d - base[0] - base[1] - base[2];
+  for (const i of [0, 1, 2].sort((a, b) => frac[b] - frac[a] || a - b)) {
+    if (left <= 0) break;
+    if (frac[i] > 0) {
+      base[i] += 1;
+      left -= 1;
+    }
   }
-  return { inclusive: toRupees(i - di), exclusive: toRupees(e - de) };
+  return { inclusive: toRupees(w[0] - base[0]), exclusive: toRupees(w[1] - base[1]), exempt: toRupees(w[2] - base[2]) };
 }
 
 /**
- * GST for one bill. The services are given in two amounts (after discount, before tip): those whose price includes
- * GST and those that have it added on top. They share one rate, and are shown together as "services".
+ * GST for one bill. The services are given in three amounts (after discount, before tip): those whose price includes
+ * GST, those that have it added on top, and those with no GST. The first two share one rate and are shown together
+ * as "services"; the amount with no GST is kept apart and never counts as taxable value.
  */
 export function billGst(
   config: Pick<GstConfig, 'services' | 'products'>,
-  amounts: { servicesInclusive: number; servicesExclusive: number; products: number },
+  amounts: { servicesInclusive: number; servicesExclusive: number; servicesExempt?: number; products: number },
 ): BillGst {
   const inc = gstPart(amounts.servicesInclusive, { rate: config.services.rate, inclusive: true });
   const exc = gstPart(amounts.servicesExclusive, { rate: config.services.rate, inclusive: false });
+  const exempt = toPaise(Math.max(0, amounts.servicesExempt ?? 0));
   const add = (a: number, b: number) => toRupees(toPaise(a) + toPaise(b));
   const services: GstPart = {
-    net: add(inc.net, exc.net),
+    net: toRupees(toPaise(inc.net) + toPaise(exc.net) + exempt),
     rate: config.services.rate,
     inclusive: exc.net === 0 && inc.net > 0,
     taxable: add(inc.taxable, exc.taxable),
     cgst: add(inc.cgst, exc.cgst),
     sgst: add(inc.sgst, exc.sgst),
-    payable: add(inc.payable, exc.payable),
+    payable: toRupees(toPaise(inc.payable) + toPaise(exc.payable) + exempt),
+    exempt: toRupees(exempt),
   };
   const products = gstPart(amounts.products, config.products);
   const sum = (a: number, b: number) => toRupees(toPaise(a) + toPaise(b));
@@ -187,7 +215,7 @@ export const DEFAULT_GST: GstConfig = {
   legalName: '',
   services: { rate: 5, inclusive: false },
   products: { rate: 18, inclusive: false },
-  inclusiveServiceIds: [],
+  serviceModes: {},
   servicesCode: '',
   productsCode: '',
 };

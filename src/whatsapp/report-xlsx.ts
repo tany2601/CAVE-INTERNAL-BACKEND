@@ -119,6 +119,7 @@ export async function renderReportXlsx(m: ReportModel): Promise<Buffer> {
   ]);
   block('GST collected (included in revenue above)', [
     ['Taxable value of bills with GST', s.gstTaxable],
+    ['Services charged with no GST (not taxable)', s.gstExempt],
     ['CGST', s.gstCgst],
     ['SGST', s.gstSgst],
     ['Total GST', s.gstTotal],

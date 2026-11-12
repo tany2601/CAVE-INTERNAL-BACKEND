@@ -75,6 +75,7 @@ export interface BillSession {
   gstServicesRate?: unknown;
   gstServicesCgst?: unknown;
   gstServicesSgst?: unknown;
+  gstServicesExempt?: unknown;
   gstProductsRate?: unknown;
   gstProductsCgst?: unknown;
   gstProductsSgst?: unknown;
@@ -109,6 +110,7 @@ export function buildBillParams(s: BillSession): string[] {
         ? lines.push(`${name} CGST ${halfRate(num(rate))}% ${inr(num(cgst))}, SGST ${halfRate(num(rate))}% ${inr(num(sgst))}`)
         : 0;
     gstLine('Services', s.gstServicesRate, s.gstServicesCgst, s.gstServicesSgst);
+    if (num(s.gstServicesExempt) > 0) lines.push(`Non-GST services ${inr(num(s.gstServicesExempt))}`);
     gstLine('Products', s.gstProductsRate, s.gstProductsCgst, s.gstProductsSgst);
     if (s.gstin) lines.push(`GSTIN ${s.gstin}`);
   }
@@ -149,13 +151,21 @@ export function buildBillParamsV2(s: BillSession): string[] {
       ? `CGST ${halfRate(num(rate))}% ${inr(num(cgst))}, SGST ${halfRate(num(rate))}% ${inr(num(sgst))}`
       : 'None';
   const gst = !!s.invoiceNumber;
+  // The services line: the tax on the services that have GST, then the amount charged without GST (so it is clear
+  // why no GST was charged on it).
+  const servicesTaxLine = (b: BillSession) => {
+    const parts: string[] = [];
+    if (num(b.gstServicesCgst) > 0 || num(b.gstServicesSgst) > 0) parts.push(taxLine(b.gstServicesRate, b.gstServicesCgst, b.gstServicesSgst));
+    if (num(b.gstServicesExempt) > 0) parts.push(`No GST on ${inr(num(b.gstServicesExempt))}`);
+    return parts.length ? parts.join('; ') : 'None';
+  };
   return [
     isWalkInName(s.customerName) ? 'there' : cleanParam(s.customerName, 60),
     cleanParam(s.branch?.name ?? 'CAVE', 60),
     cleanParam(joinLines(s.services.map((x) => ({ name: x.serviceName, price: num(x.price) }))), 400),
     cleanParam(joinLines(s.products.map((x) => ({ name: x.productName, price: num(x.price) }))), 400),
     num(s.discountAmount) > 0 ? `-${inr(num(s.discountAmount))}` : 'None',
-    gst ? taxLine(s.gstServicesRate, s.gstServicesCgst, s.gstServicesSgst) : 'None',
+    gst ? servicesTaxLine(s) : 'None',
     gst ? taxLine(s.gstProductsRate, s.gstProductsCgst, s.gstProductsSgst) : 'None',
     num(s.tipAmount) > 0 ? inr(num(s.tipAmount)) : 'None',
     cleanParam(inr(num(s.totalAmount)), 20),

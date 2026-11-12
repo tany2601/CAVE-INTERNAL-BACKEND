@@ -29,6 +29,8 @@ export interface InvoiceGstPart {
   sgst: number;
   /** SAC / HSN code, printed when set. */
   code?: string;
+  /** Services only: what was charged on services with no GST (not part of the taxable value). */
+  exempt?: number;
 }
 
 /** What makes the bill a GST tax invoice. Absent for bills from before GST was switched on. */
@@ -213,12 +215,15 @@ export function renderBillSvg(b: BillImageData): { svg: string; height: number }
       ['Products', b.invoice.products],
     ] as const;
     for (const [name, part] of sides) {
-      if (part.taxable <= 0 && part.cgst <= 0) continue;
-      const half = halfRate(part.rate);
-      const note = part.inclusive ? ' (incl.)' : '';
-      taxRows.push([`${name} taxable value${part.code ? ` (${part.code})` : ''}`, inr(part.taxable), '#CFCFD8']);
-      taxRows.push([`CGST @ ${half}%${note}`, inr(part.cgst), '#B4B4C0']);
-      taxRows.push([`SGST @ ${half}%${note}`, inr(part.sgst), '#B4B4C0']);
+      if (part.taxable > 0 || part.cgst > 0) {
+        const half = halfRate(part.rate);
+        const note = part.inclusive ? ' (incl.)' : '';
+        taxRows.push([`${name} taxable value${part.code ? ` (${part.code})` : ''}`, inr(part.taxable), '#CFCFD8']);
+        taxRows.push([`CGST @ ${half}%${note}`, inr(part.cgst), '#B4B4C0']);
+        taxRows.push([`SGST @ ${half}%${note}`, inr(part.sgst), '#B4B4C0']);
+      }
+      // Services with no GST are shown on their own line, so it is clear why no GST was charged on them.
+      if ((part.exempt ?? 0) > 0) taxRows.push([`Non-GST ${name.toLowerCase()} (no GST charged)`, inr(part.exempt ?? 0), '#CFCFD8']);
     }
   }
   const extras = [

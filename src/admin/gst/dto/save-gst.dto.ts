@@ -1,6 +1,7 @@
+import { GstMode } from '../../../common/gst.js';
 import { ApiProperty } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsBoolean, IsNumber, IsOptional, IsString, Matches, Max, MaxLength, Min, ValidateNested } from 'class-validator';
+import { IsBoolean, IsNumber, IsObject, IsOptional, IsString, Matches, Max, MaxLength, Min, ValidateNested } from 'class-validator';
 
 export class GstSideDto {
   @ApiProperty({ example: 5, description: 'Total GST rate in percent (CGST and SGST are half each)' })
@@ -38,11 +39,12 @@ export class SaveBranchGstDto {
   @IsBoolean()
   productsInclusive!: boolean;
 
-  @ApiProperty({ type: [String], description: 'Services (ids) whose menu price includes the GST at this branch' })
-  @IsArray()
-  @ArrayMaxSize(1000)
-  @IsString({ each: true })
-  inclusiveServiceIds!: string[];
+  @ApiProperty({
+    example: { 'service-id': 'INCLUDED_IN_PRICE' },
+    description: 'How GST works for each service at this branch: ADD_ON_TOP, INCLUDED_IN_PRICE or NO_GST',
+  })
+  @IsObject()
+  serviceModes!: Record<string, GstMode>;
 }
 
 export class SaveGstDto {
@@ -73,11 +75,12 @@ export class SaveGstDto {
   @Type(() => GstSideDto)
   products!: GstSideDto;
 
-  @ApiProperty({ type: [String], description: 'Services (ids) whose menu price already includes the GST; every other service has it added on top' })
-  @IsArray()
-  @ArrayMaxSize(1000)
-  @IsString({ each: true })
-  inclusiveServiceIds!: string[];
+  @ApiProperty({
+    example: { 'service-id': 'NO_GST' },
+    description: 'How GST works for each service by default: ADD_ON_TOP, INCLUDED_IN_PRICE or NO_GST',
+  })
+  @IsObject()
+  serviceModes!: Record<string, GstMode>;
 
   @ApiProperty({ example: '999721', required: false, description: 'SAC code for services, printed on the bill when filled in' })
   @IsOptional()

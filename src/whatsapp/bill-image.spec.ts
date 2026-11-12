@@ -178,3 +178,30 @@ describe('GST tax invoice picture', () => {
     expect(png.subarray(1, 4).toString()).toBe('PNG');
   });
 });
+
+describe('Non-GST services on the bill picture', () => {
+  it('get their own line, and are not in the taxable value', () => {
+    const { svg } = renderBillSvg({
+      id: 'aaaaaaaa-bbbb-cccc-dddd-0123456789ab',
+      customerName: 'Ravi',
+      branchName: 'CAVE BTM',
+      paymentMode: 'CASH',
+      closedAt: new Date('2026-11-14T10:30:00Z'),
+      discountAmount: 0,
+      tipAmount: 0,
+      totalAmount: 1410,
+      services: [{ name: 'Haircut + Hair Wash & Style', price: 150 }, { name: 'Facial', price: 1200 }],
+      products: [],
+      invoice: {
+        number: 'CV/26-27/000001',
+        gstin: '29AAOCC1889N1ZO',
+        services: { rate: 5, inclusive: false, taxable: 1200, cgst: 30, sgst: 30, exempt: 150 },
+        products: { rate: 18, inclusive: false, taxable: 0, cgst: 0, sgst: 0 },
+      },
+    });
+    expect(svg).toContain('Services taxable value');
+    expect(svg).toContain('₹1,200');
+    expect(svg).toContain('Non-GST services (no GST charged)');
+    expect(svg).toContain('₹150');
+  });
+});

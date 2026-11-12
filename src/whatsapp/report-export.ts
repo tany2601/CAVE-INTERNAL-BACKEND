@@ -65,6 +65,7 @@ export class ReportExport {
           gstServicesTaxable: true,
           gstServicesCgst: true,
           gstServicesSgst: true,
+          gstServicesExempt: true,
           gstProductsTaxable: true,
           gstProductsCgst: true,
           gstProductsSgst: true,

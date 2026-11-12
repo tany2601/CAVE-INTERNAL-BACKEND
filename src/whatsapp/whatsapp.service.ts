@@ -103,6 +103,7 @@ export class WhatsappService {
     gstServicesTaxable?: unknown;
     gstServicesCgst?: unknown;
     gstServicesSgst?: unknown;
+    gstServicesExempt?: unknown;
     gstProductsRate?: unknown;
     gstProductsInclusive?: boolean;
     gstProductsTaxable?: unknown;
@@ -125,6 +126,7 @@ export class WhatsappService {
           cgst: Number(session.gstServicesCgst ?? 0),
           sgst: Number(session.gstServicesSgst ?? 0),
           code: settings?.servicesCode || undefined,
+          exempt: Number(session.gstServicesExempt ?? 0),
         },
         products: {
           rate: Number(session.gstProductsRate ?? 0),

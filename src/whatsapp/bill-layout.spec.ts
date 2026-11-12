@@ -106,3 +106,14 @@ describe('sending the bill picks the matching variables', () => {
     expect(enqueue.mock.calls[0][0].params).toHaveLength(6);
   });
 });
+
+describe('services with no GST on the WhatsApp bill', () => {
+  it('say why no GST was charged on them', () => {
+    const p = buildBillParamsV2({ ...bill, services: [{ serviceName: 'Haircut + Hair Wash & Style', price: 150 }], gstServicesCgst: 0, gstServicesSgst: 0, gstServicesExempt: 150 });
+    expect(p[5]).toBe('No GST on ₹150');
+    // taxed and untaxed services together: the tax first, then what had none
+    const both = buildBillParamsV2({ ...bill, gstServicesExempt: 150 });
+    expect(both[5]).toBe('CGST 2.5% ₹97.14, SGST 2.5% ₹97.14; No GST on ₹150');
+    for (const v of [...p, ...both]) expect(v).not.toMatch(/[\r\n\t]/);
+  });
+});
