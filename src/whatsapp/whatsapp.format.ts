@@ -138,7 +138,7 @@ const joinLines = (lines: { name: string; price: number }[]): string =>
     : 'None';
 
 /**
- * Body variables for the `cave_bill_v2` template. WhatsApp does not allow line breaks inside a variable, so each
+ * Body variables for the `cave_bill_v2` and `cave_bill_image_v2` templates (the picture version has the same text). WhatsApp does not allow line breaks inside a variable, so each
  * part of the bill has its own variable and the template puts them on separate lines:
  *  1 customer · 2 branch · 3 services · 4 products · 5 discount · 6 GST on services · 7 GST on products · 8 tip ·
  *  9 total · 10 paid by · 11 invoice / bill no. · 12 GSTIN · 13 the branch's Google review link
@@ -162,21 +162,6 @@ export function buildBillParamsV2(s: BillSession): string[] {
     s.paymentMode === 'GPAY' ? 'GPay' : 'Cash',
     s.invoiceNumber ?? billNumber(s.id),
     s.gstin ?? 'Not applicable',
-    reviewLine(s.branch),
-  ];
-}
-
-/**
- * Body variables for the `cave_bill_image_v2` template. The picture above the message carries every line, so the
- * caption is short: 1 customer · 2 branch · 3 total · 4 paid by · 5 invoice / bill no. · 6 the branch's review link
- */
-export function buildBillImageParamsV2(s: BillSession): string[] {
-  return [
-    isWalkInName(s.customerName) ? 'there' : cleanParam(s.customerName, 60),
-    cleanParam(s.branch?.name ?? 'CAVE', 60),
-    cleanParam(inr(num(s.totalAmount)), 20),
-    s.paymentMode === 'GPAY' ? 'GPay' : 'Cash',
-    s.invoiceNumber ?? billNumber(s.id),
     reviewLine(s.branch),
   ];
 }

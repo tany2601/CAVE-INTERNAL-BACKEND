@@ -56,34 +56,38 @@ Under it you choose how the bill looks:
    choose the picture format; the two `cave_offer…` ones only if you send offers.
 
    **`cave_bill_v2`** (the bill as separate lines. WhatsApp does not allow a line break inside a variable, so every
-   part of the bill has its own variable and the template puts them on their own lines)
+   part of the bill has its own variable and the template puts them on their own lines. Category *Utility*, no header)
 
    ```
-   Hi {{1}}, thank you for visiting {{2}}!
+   Hi *{{1}}*, thank you for visiting *CAVE Saloon*!
 
-   Services: {{3}}
-   Products: {{4}}
-   Discount: {{5}}
-   GST on services: {{6}}
-   GST on products: {{7}}
-   Tip: {{8}}
+   Branch: *{{2}}*
+   Services: *{{3}}*
+   Products: *{{4}}*
+   Discount: *{{5}}*
+   GST on services: *{{6}}*
+   GST on products: *{{7}}*
+   Tip: *{{8}}*
 
-   Total paid: {{9}} ({{10}})
-   Invoice no.: {{11}}
-   GSTIN: {{12}}
+   Total paid: *{{9}} ({{10}})*
+
+   Invoice no.: *{{11}}*
+   GSTIN: *{{12}}*
 
    Rate your visit: {{13}}
 
-   We hope to see you again!
+   *Thank you for choosing CAVE Saloon😎!*
    ```
 
-   Samples: `Ravi`, `CAVE Karkala`, `Hair Spa ₹600, Beard Spa ₹300`, `Matte Clay ₹599`, `None`,
-   `CGST 2.5% ₹22.50, SGST 2.5% ₹22.50`, `CGST 9% ₹53.82, SGST 9% ₹53.82`, `None`, `₹1,494`, `GPay`,
-   `CV/26-27/000021`, `29AAOCC1889N1ZO`, `https://g.page/r/CkarkalaEAI/review`
+   Samples: `Rahul`, `CAVE KARKALA`, `Hair Spa ₹600, Beard Spa ₹300, Hydra Facial ₹3,000`,
+   `De-Tan Coffee Face Wash- 100ml ×2 ₹598`, `None`, `CGST 2.5% ₹97.14, SGST 2.5% ₹97.14`,
+   `CGST 9% ₹53.82, SGST 9% ₹53.82`, `None`, `₹4,785.64`, `GPay`, `CV/26-27/000021`, `29AAOCC1889N1ZO`,
+   `https://tinyurl.com/tfj26pfz`
 
-   The last variable is the branch's Google review link (set per branch in Admin → Branches). A branch with no link
-   yet shows "reply to this message with your feedback" there. A part with nothing in it shows `None`. Names ending in `_v2` switch the app to this layout; the older
+   Names ending in `_v2` (or `_v3` …) switch the app to this layout, with these 13 variables in this order. The older
    single-paragraph `cave_bill` / `cave_bill_image` (variables 1 to 6) keep working if you leave them in `.env`.
+   The last variable is the branch's review link (set per branch in Admin → Branches); a branch with no link yet shows
+   "reply to this message with your feedback" there. A part with nothing in it shows `None`.
 
    **`cave_report`** (category *Utility*, no header; the plain-text report, used when the Excel can't be attached)
 
@@ -124,20 +128,30 @@ Under it you choose how the bill looks:
    (same samples as `cave_report`). If this template is missing or the file cannot be made, the plain `cave_report`
    goes out instead.
 
-   **`cave_bill_image_v2`** (category *Utility*, **Header: Image**; for the header sample upload `assets/sample-bill.png`. It is only an example for Meta's review: the real bill picture is generated and attached for every bill. The picture lists every item and the GST, so the text under it is short)
+   **`cave_bill_image_v2`** (category *Utility*, **Header: Image**; for the header sample upload `assets/sample-bill.png`. It is only an example for Meta's review: the real bill picture is generated and attached for every bill. The text is the same as `cave_bill_v2`, with the same 13 variables)
 
    ```
-   Hi {{1}}, thank you for visiting {{2}}! Your bill is in the picture above.
+   Hi *{{1}}*, thank you for visiting *CAVE Saloon*!
 
-   Total paid: {{3}} ({{4}})
-   Invoice no.: {{5}}
+   Branch: *{{2}}*
+   Services: *{{3}}*
+   Products: *{{4}}*
+   Discount: *{{5}}*
+   GST on services: *{{6}}*
+   GST on products: *{{7}}*
+   Tip: *{{8}}*
 
-   Rate your visit: {{6}}
+   Total paid: *{{9}} ({{10}})*
 
-   We hope to see you again!
+   Invoice no.: *{{11}}*
+   GSTIN: *{{12}}*
+
+   Rate your visit: {{13}}
+
+   *Thank you for choosing CAVE Saloon😎!*
    ```
 
-   Samples: `Ravi`, `CAVE Karkala`, `₹1,494`, `GPay`, `CV/26-27/000021`, `https://g.page/r/CkarkalaEAI/review`
+   (same samples as `cave_bill_v2`)
 
    **`cave_offer`** (category **Marketing**, no header). Add one **Quick reply** button with the text `Stop promotions`
    (WhatsApp recommends an opt-out on every marketing message; the app reads that button as STOP)
@@ -192,7 +206,8 @@ No Business Profile card (you are not the manager yet)? Use the Place ID instead
 and use `https://search.google.com/local/writereview?placeid=<PLACE ID>`.
 
 The link is printed at the bottom of that branch's WhatsApp bill. The app accepts only https links from Google
-(`g.page`, `goo.gl`, `search.google.com`, `google.com`), so a typo cannot put another website on a bill.
+(`g.page`, `goo.gl`, `search.google.com`, `google.com`) or a short link such as `tinyurl.com`, `bit.ly`, so a typo
+cannot put another website on a bill.
 
 ## Checking a report yourself (Admin → Settings → WhatsApp → Try a report)
 

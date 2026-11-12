@@ -39,8 +39,8 @@ export class SessionsService {
   ) {}
 
   /** GST terms for a new bill, or null when GST is switched off. */
-  private async currentGst(): Promise<GstTerms | null> {
-    const cfg = await this.gstSettings?.get();
+  private async currentGst(branchId: string): Promise<GstTerms | null> {
+    const cfg = await this.gstSettings?.getForBranch(branchId);
     return cfg?.enabled
       ? { gstin: cfg.gstin, services: cfg.services, products: cfg.products, inclusiveServiceIds: cfg.inclusiveServiceIds }
       : null;
@@ -337,6 +337,9 @@ export class SessionsService {
     if (existingActiveSession) {
       return {
         message: 'Active session already exists for this customer',
+        // The caller did not start a new session: it is the one the customer already had, so it must not be
+        // thrown away when a quick bill is cancelled.
+        reused: true,
         session: this.formatSessionOutput(existingActiveSession),
       };
     }
@@ -809,7 +812,7 @@ export class SessionsService {
     const billingContact = this.normalizePhone(dto.whatsappTo);
     let freeVisit = !!session.customer && isFreeVisitNext(session.customer.qualifyingCompletedSessionsCount);
 
-    const terms = await this.currentGst();
+    const terms = await this.currentGst(branchId);
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const {

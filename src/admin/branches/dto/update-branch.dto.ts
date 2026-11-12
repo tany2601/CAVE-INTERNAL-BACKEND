@@ -68,8 +68,8 @@ export class UpdateBranchDto {
   @IsOptional()
   @IsString({ message: 'The review link must be text.' })
   @MaxLength(300, { message: 'That review link is too long.' })
-  @Matches(/^https:\/\/(g\.page|g\.co|goo\.gl|maps\.app\.goo\.gl|share\.google|(?:[a-z0-9-]+\.)*google\.(?:com|co\.in|in))(\/|$)/i, {
-    message: 'Paste the Google review link. It starts with https://g.page/… or https://search.google.com/…',
+  @Matches(/^https:\/\/(g\.page|g\.co|goo\.gl|maps\.app\.goo\.gl|share\.google|tinyurl\.com|bit\.ly|rb\.gy|cutt\.ly|(?:[a-z0-9-]+\.)*google\.(?:com|co\.in|in))(\/|$)/i, {
+    message: 'Paste the Google review link (https://g.page/… or https://search.google.com/…), or a short link to it such as https://tinyurl.com/…',
   })
   reviewUrl?: string | null;
 

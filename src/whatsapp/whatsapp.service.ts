@@ -5,7 +5,7 @@ import { WhatsappSettings } from './whatsapp.settings.js';
 import { BillImageData, renderBillPng } from './bill-image.js';
 import { WhatsappClient } from './whatsapp.client.js';
 import { WhatsappOutbox } from './whatsapp.outbox.js';
-import { branchAddress, buildBillImageParamsV2, buildBillParams, buildBillParamsV2, toWhatsappNumber, usesLineLayout } from './whatsapp.format.js';
+import { branchAddress, buildBillParams, buildBillParamsV2, toWhatsappNumber, usesLineLayout } from './whatsapp.format.js';
 import { GST_STATE_NAMES } from '../common/gst.js';
 import { GstSettings } from '../common/gst-settings.service.js';
 
@@ -49,7 +49,7 @@ export class WhatsappService {
         sessionId: session.id,
       };
       const textParams = usesLineLayout(this.client.templates.bill) ? buildBillParamsV2(session) : buildBillParams(session);
-      const imageParams = usesLineLayout(this.client.templates.billImage) ? buildBillImageParamsV2(session) : buildBillParams(session);
+      const imageParams = usesLineLayout(this.client.templates.billImage) ? buildBillParamsV2(session) : buildBillParams(session);
       // The picture is made and uploaded now; if either step fails the customer still gets the text bill.
       let header: { id: string } | undefined;
       if (billFormat === 'image') {

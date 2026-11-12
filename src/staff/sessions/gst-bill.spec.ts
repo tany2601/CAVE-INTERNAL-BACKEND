@@ -40,7 +40,7 @@ describe('GST on a closed bill', () => {
       branchServicePricing: { findMany: vi.fn(async ({ where }: any) => menu.filter((m) => where.id.in.includes(m.id))) },
       $transaction: vi.fn(async (fn: any) => fn(tx)),
     };
-    service = new SessionsService(prisma, undefined, { get: async () => gstConfig } as any);
+    service = new SessionsService(prisma, undefined, { get: async () => gstConfig, getForBranch: async () => gstConfig } as any);
   });
 
   const open = () =>

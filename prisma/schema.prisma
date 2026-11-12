@@ -40,6 +40,7 @@ model Branch {
   isActive      Boolean         @default(true)
   createdAt     DateTime        @default(now())
   discount      BranchDiscount?
+  gst           BranchGst?
   updatedAt     DateTime        @updatedAt
 
   users                User[]
@@ -536,6 +537,21 @@ model AppSetting {
 model InvoiceCounter {
   fy   String @id
   last Int    @default(0)
+}
+
+/// A branch's own GST settings (Admin → GST). A branch without a row follows the business defaults (5% on services,
+/// 18% on products, haircuts and beard with GST in the price). The business-wide GSTIN, registered name and master
+/// switch stay in AppSetting "gst".
+model BranchGst {
+  branchId            String   @id
+  branch              Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  enabled             Boolean  @default(true)
+  servicesRate        Decimal  @default(5.00) @db.Decimal(5, 2)
+  productsRate        Decimal  @default(18.00) @db.Decimal(5, 2)
+  productsInclusive   Boolean  @default(false)
+  /// Services (Service ids) whose menu price already includes the GST at this branch; the rest have it added on top.
+  inclusiveServiceIds String[] @default([])
+  updatedAt           DateTime @updatedAt
 }
 
 /// The discount an admin sets for one branch (Admin → Discounts). When enabled, the billing screen starts with

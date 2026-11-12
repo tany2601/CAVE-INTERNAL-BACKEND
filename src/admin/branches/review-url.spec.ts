@@ -14,6 +14,7 @@ describe('a branch review link', () => {
       'https://www.google.com/maps/place/CAVE+Karkala',
       'https://maps.app.goo.gl/AbCdEf123',
       'https://g.co/kgs/abc123',
+      'https://tinyurl.com/tfj26pfz', // a short link to the Google review page
     ]) {
       expect(await errorsFor(url), url).toEqual([]);
     }
@@ -22,7 +23,7 @@ describe('a branch review link', () => {
   it('can be cleared, and refuses anything that is not a Google https link', async () => {
     expect(await errorsFor(null)).toEqual([]);
     expect(await errorsFor(undefined)).toEqual([]);
-    for (const url of ['http://g.page/r/abc/review', 'https://evil.example.com/g.page/r/abc', 'https://google.evil.com/x', 'javascript:alert(1)', 'g.page/r/abc', 'https://g.page.evil.com/r/x']) {
+    for (const url of ['http://g.page/r/abc/review', 'https://evil.example.com/g.page/r/abc', 'https://tinyurl.com.evil.com/x', 'https://google.evil.com/x', 'javascript:alert(1)', 'g.page/r/abc', 'https://g.page.evil.com/r/x']) {
       expect((await errorsFor(url)).length, url).toBeGreaterThan(0);
     }
   });

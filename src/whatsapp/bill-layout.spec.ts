@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SessionStatus } from '@prisma/client';
-import { buildBillImageParamsV2, buildBillParams, buildBillParamsV2, usesLineLayout } from './whatsapp.format.js';
+import { buildBillParams, buildBillParamsV2, usesLineLayout } from './whatsapp.format.js';
 import { WhatsappService } from './whatsapp.service.js';
 
 // The bill from the report: three services, a product bought twice, and GST on both.
@@ -62,11 +62,6 @@ describe('line-by-line WhatsApp bill (cave_bill_v2)', () => {
     expect(params[11]).toBe('Not applicable'); // a bill without GST
     // a branch with no review link yet still fills the variable (it cannot be empty)
     expect(buildBillParamsV2({ ...bill, branch: { name: 'CAVE New' } })[12]).toBe('reply to this message with your feedback')
-    expect(buildBillImageParamsV2({ ...bill, branch: { name: 'CAVE New' } })[5]).toBe('reply to this message with your feedback')
-  });
-
-  it('the picture caption is short: the picture has the lines', () => {
-    expect(buildBillImageParamsV2(bill)).toEqual(['Thanay', 'CAVE Karkala', '₹4,785.64', 'GPay', 'CV/26-27/000021', 'https://g.page/r/CkarkalaEAI/review']);
   });
 
   it('only template names ending in _v2 use it; the older templates keep their single-paragraph layout', () => {
@@ -97,11 +92,12 @@ describe('sending the bill picks the matching variables', () => {
     expect(enqueue.mock.calls[0][0].params).toHaveLength(13);
   });
 
-  it('picture bill on a _v2 template: six variables and the picture', async () => {
+  it('picture bill on a _v2 template: the same thirteen variables, plus the picture', async () => {
     const { service, enqueue } = make({ bill: 'cave_bill_v2', billImage: 'cave_bill_image_v2' }, 'image');
     await service.sendBill('s1');
     expect(enqueue.mock.calls[0][0]).toMatchObject({ template: 'cave_bill_image_v2', header: { id: 'media-1' } });
-    expect(enqueue.mock.calls[0][0].params).toHaveLength(6);
+    expect(enqueue.mock.calls[0][0].params).toHaveLength(13);
+    expect(enqueue.mock.calls[0][0].params).toEqual(buildBillParamsV2({ ...bill, branch: bill.branch }));
   });
 
   it('the older templates still get the six variables they were approved with', async () => {

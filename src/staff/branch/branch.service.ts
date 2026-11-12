@@ -369,7 +369,7 @@ export class BranchOpsService {
       // The discount the admin set for this branch (Admin → Discounts)
       this.prisma.branchDiscount?.findUnique({ where: { branchId } }) ?? null,
       // GSTIN, rates and whether prices include GST (Admin → Settings)
-      this.gstSettings?.get() ?? null,
+      this.gstSettings?.getForBranch(branchId) ?? null,
     ]);
 
     const paidBy = new Map<string, number>();

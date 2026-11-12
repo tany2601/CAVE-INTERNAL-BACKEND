@@ -17,6 +17,34 @@ export class GstSideDto {
 const upper = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim().toUpperCase() : value);
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 
+export class SaveBranchGstDto {
+  @ApiProperty({ example: true, description: 'GST on this branch\'s bills' })
+  @IsBoolean()
+  enabled!: boolean;
+
+  @ApiProperty({ example: 5, description: 'Total GST rate on services (CGST and SGST are half each)' })
+  @IsNumber({ maxDecimalPlaces: 2 }, { message: 'The rate must be a number with up to 2 decimal places.' })
+  @Min(0, { message: 'The rate cannot be negative.' })
+  @Max(100, { message: 'The rate cannot be more than 100%.' })
+  servicesRate!: number;
+
+  @ApiProperty({ example: 18, description: 'Total GST rate on products' })
+  @IsNumber({ maxDecimalPlaces: 2 }, { message: 'The rate must be a number with up to 2 decimal places.' })
+  @Min(0, { message: 'The rate cannot be negative.' })
+  @Max(100, { message: 'The rate cannot be more than 100%.' })
+  productsRate!: number;
+
+  @ApiProperty({ example: false, description: 'True when product prices already include the GST' })
+  @IsBoolean()
+  productsInclusive!: boolean;
+
+  @ApiProperty({ type: [String], description: 'Services (ids) whose menu price includes the GST at this branch' })
+  @IsArray()
+  @ArrayMaxSize(1000)
+  @IsString({ each: true })
+  inclusiveServiceIds!: string[];
+}
+
 export class SaveGstDto {
   @ApiProperty({ example: true })
   @IsBoolean()

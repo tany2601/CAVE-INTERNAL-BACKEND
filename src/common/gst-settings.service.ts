@@ -34,6 +34,19 @@ export function cleanGst(v?: Partial<GstConfig> | null): GstConfig {
   };
 }
 
+export interface BranchGstSetting {
+  branchId: string;
+  branchName: string;
+  isActive: boolean;
+  /** false while the branch follows the business defaults */
+  customised: boolean;
+  enabled: boolean;
+  servicesRate: number;
+  productsRate: number;
+  productsInclusive: boolean;
+  inclusiveServiceIds: string[];
+}
+
 /** The business's GST details: GSTIN, the rates, and whether prices already include the tax. */
 @Injectable()
 export class GstSettings {
@@ -49,6 +62,62 @@ export class GstSettings {
       clean.inclusiveServiceIds = services.filter((s) => isHaircutOrBeard(s.name)).map((s) => s.id);
     }
     return clean;
+  }
+
+  /**
+   * The GST rules for one branch's bills: the business details (GSTIN, name, codes) with the branch's own switch,
+   * rates and service list on top. A branch that has not been customised follows the business defaults.
+   */
+  async getForBranch(branchId: string): Promise<GstConfig> {
+    const [base, row] = await Promise.all([this.get(), this.prisma.branchGst.findUnique({ where: { branchId } })]);
+    if (!row) return base;
+    return {
+      ...base,
+      enabled: base.enabled && row.enabled,
+      services: { ...base.services, rate: Number(row.servicesRate) },
+      products: { rate: Number(row.productsRate), inclusive: row.productsInclusive },
+      inclusiveServiceIds: row.inclusiveServiceIds ?? [],
+    };
+  }
+
+  /** Every branch with the GST rules its bills use, and whether they were customised or follow the defaults. */
+  async listBranches(): Promise<BranchGstSetting[]> {
+    const [base, branches, rows] = await Promise.all([
+      this.get(),
+      this.prisma.branch.findMany({ orderBy: { createdAt: 'asc' }, select: { id: true, name: true, isActive: true } }),
+      this.prisma.branchGst.findMany(),
+    ]);
+    const byBranch = new Map(rows.map((r) => [r.branchId, r]));
+    return branches.map((b) => {
+      const row = byBranch.get(b.id);
+      return {
+        branchId: b.id,
+        branchName: b.name,
+        isActive: b.isActive,
+        customised: !!row,
+        enabled: row ? row.enabled : true,
+        servicesRate: row ? Number(row.servicesRate) : base.services.rate,
+        productsRate: row ? Number(row.productsRate) : base.products.rate,
+        productsInclusive: row ? row.productsInclusive : base.products.inclusive,
+        inclusiveServiceIds: row ? (row.inclusiveServiceIds ?? []) : base.inclusiveServiceIds,
+      };
+    });
+  }
+
+  async saveBranch(branchId: string, input: Omit<BranchGstSetting, 'branchId' | 'branchName' | 'isActive' | 'customised'>) {
+    const data = {
+      enabled: input.enabled,
+      servicesRate: rate(input.servicesRate, DEFAULT_GST.services.rate),
+      productsRate: rate(input.productsRate, DEFAULT_GST.products.rate),
+      productsInclusive: input.productsInclusive,
+      inclusiveServiceIds: [...new Set(input.inclusiveServiceIds)],
+    };
+    await this.prisma.branchGst.upsert({ where: { branchId }, create: { branchId, ...data }, update: data });
+  }
+
+  /** Back to the business defaults. */
+  async resetBranch(branchId: string) {
+    await this.prisma.branchGst.deleteMany({ where: { branchId } });
   }
 
   async save(value: GstConfig): Promise<GstConfig> {
