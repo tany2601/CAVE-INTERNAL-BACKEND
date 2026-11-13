@@ -23,6 +23,7 @@ import {
   SetOpeningBalanceDto,
 } from './dto/staff-ops.dto.js';
 import { computeCommission, round2 } from '../../common/commission.util.js';
+import { maskPhone, normalizeName } from '../../common/customer-match.js';
 import { gstTaxOf } from '../../admin/reports/finance.js';
 import { sortMenu } from '../../common/menu-order.js';
 import { toSetting } from '../../admin/discounts/discount-settings.js';
@@ -426,13 +427,40 @@ export class BranchOpsService {
   }
 
   /** Loyalty progress for the customer-facing loyalty screen. */
-  async lookupCustomer(phone: string) {
-    const digits = phone.replace(/\D/g, '');
-    const normalized =
-      digits.length > 10 && digits.startsWith('91') ? digits.slice(-10) : digits;
-    const customer = await this.prisma.customer.findUnique({
-      where: { phone: normalized },
+  /**
+   * Customers saved with exactly this name (capital letters and extra spaces ignored) whose number starts with the
+   * digits typed so far, newest first. Each comes as an id and a masked number (98*****345); the full number is
+   * never sent. At most 8, so a very common name asks for more digits instead of listing everyone.
+   */
+  async suggestCustomers(name: string, digits: string) {
+    const wanted = normalizeName(name);
+    if (wanted.length < 2) return { data: [] };
+    const rows = await this.prisma.customer.findMany({
+      where: {
+        name: { equals: wanted, mode: 'insensitive' },
+        ...(digits ? { phone: { startsWith: digits } } : {}),
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: 9,
+      select: { id: true, phone: true, qualifyingCompletedSessionsCount: true },
     });
+    const data = rows
+      .map((c) => ({ id: c.id, maskedPhone: maskPhone(c.phone), visits: c.qualifyingCompletedSessionsCount }))
+      .filter((c): c is { id: string; maskedPhone: string; visits: number } => c.maskedPhone !== null)
+      .slice(0, 8);
+    return { data, more: rows.length > 8 };
+  }
+
+  async lookupCustomer(input: string | { phone?: string; customerId?: string }) {
+    const by = typeof input === 'string' ? { phone: input } : input;
+    let customer = null;
+    if (by.customerId) {
+      customer = await this.prisma.customer.findUnique({ where: { id: by.customerId } });
+    } else if (by.phone) {
+      const digits = by.phone.replace(/\D/g, '');
+      const normalized = digits.length > 10 && digits.startsWith('91') ? digits.slice(-10) : digits;
+      customer = await this.prisma.customer.findUnique({ where: { phone: normalized } });
+    }
     if (!customer) {
       return {
         found: false,

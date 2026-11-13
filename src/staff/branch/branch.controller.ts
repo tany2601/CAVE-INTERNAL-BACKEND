@@ -24,7 +24,7 @@ import {
   SetOpeningBalanceDto,
   StatsQueryDto,
 } from './dto/staff-ops.dto.js';
-import { CustomerLookupQueryDto } from './dto/customer-lookup-query.dto.js';
+import { CustomerLookupQueryDto, CustomerSuggestQueryDto } from './dto/customer-lookup-query.dto.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
 import { RolesGuard } from '../../common/guards/roles.guard.js';
 import { Roles } from '../../common/decorators/roles.decorator.js';
@@ -64,7 +64,16 @@ export class BranchOpsController {
   @Roles('STYLIST', 'MANAGER')
   @ApiOperation({ summary: 'Loyalty progress for a customer phone number' })
   lookupCustomer(@Query() query: CustomerLookupQueryDto) {
-    return this.branchOps.lookupCustomer(query.phone);
+    return this.branchOps.lookupCustomer(query);
+  }
+
+  @Get('customers/suggest')
+  @Roles('STYLIST', 'MANAGER')
+  @ApiOperation({
+    summary: 'Customers with this name, each with a masked number, to pick from while the number is typed',
+  })
+  suggestCustomers(@Query() query: CustomerSuggestQueryDto) {
+    return this.branchOps.suggestCustomers(query.name, query.digits ?? '');
   }
 
   @Post('expenses')

@@ -13,6 +13,7 @@ import {
   ArrayUnique,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
+import { capitalizeName } from '../../../common/customer-match.js';
 
 export class CreateSessionDto {
   @ApiProperty({
@@ -26,8 +27,16 @@ export class CreateSessionDto {
     message: 'Name can only contain letters, spaces and . \' -',
   })
   @MaxLength(100, { message: 'Customer name must not exceed 100 characters.' })
-  @Transform(({ value }: { value?: string }) => value?.trim())
+  @Transform(({ value }: { value?: string }) => (typeof value === 'string' ? capitalizeName(value.trim()) : value))
   customerName: string;
+
+  @ApiPropertyOptional({
+    description:
+      'A returning customer picked from the suggestions. Their saved name and number are used (customerMobile is ignored), so what was shown is exactly what is saved.',
+  })
+  @IsOptional()
+  @IsUUID('4', { message: 'customerId must be a valid UUID v4.' })
+  customerId?: string;
 
   @ApiPropertyOptional({
     description:

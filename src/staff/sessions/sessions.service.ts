@@ -300,15 +300,21 @@ export class SessionsService {
 
   async createSession(reqUser: any, dto: CreateSessionDto) {
     const { branchId, branch } = await this.resolveBranchContext(reqUser);
-    const normalizedPhone = this.normalizePhone(dto.customerMobile);
+    // A customer picked from the suggestions: their saved name and number are used, so nothing typed or shown on the
+    // screen can differ from what is saved.
+    const picked = dto.customerId ? await this.prisma.customer.findUnique({ where: { id: dto.customerId } }) : null;
+    if (dto.customerId && !picked) {
+      throw new BadRequestException('That customer could not be found. Please type the number instead.');
+    }
+    const normalizedPhone = picked ? picked.phone : this.normalizePhone(dto.customerMobile);
+    const customerName = picked ? picked.name : dto.customerName;
 
     // These lookups don't depend on each other, so run them together (each one is a round-trip
     // to the database, which is what made starting a session feel slow).
     const [existingCustomer, existingActiveSession, stylistUser, pricing] =
       await Promise.all([
-        normalizedPhone
-          ? this.prisma.customer.findUnique({ where: { phone: normalizedPhone } })
-          : null,
+        picked ??
+          (normalizedPhone ? this.prisma.customer.findUnique({ where: { phone: normalizedPhone } }) : null),
         // Prevent a duplicate active session for the same registered customer in the branch.
         normalizedPhone
           ? this.prisma.session.findFirst({
@@ -389,17 +395,17 @@ export class SessionsService {
     let customer = existingCustomer;
     if (normalizedPhone) {
       if (customer) {
-        if (customer.name !== dto.customerName) {
+        if (customer.name !== customerName) {
           customer = await this.prisma.customer.update({
             where: { id: customer.id },
-            data: { name: dto.customerName },
+            data: { name: customerName },
           });
         }
       } else {
         try {
           customer = await this.prisma.customer.create({
             data: {
-              name: dto.customerName,
+              name: customerName,
               phone: normalizedPhone,
               qualifyingCompletedSessionsCount: 0,
               rewardEarned: false,
@@ -418,7 +424,7 @@ export class SessionsService {
         branchId,
         stylistId: stylist?.id ?? null,
         customerId: customer?.id ?? null,
-        customerName: dto.customerName,
+        customerName,
         customerMobile: normalizedPhone,
         status: SessionStatus.ACTIVE,
         // startNow begins the service timer in the same request (saves a second round-trip).
@@ -1087,9 +1093,9 @@ export class SessionsService {
       where: { id: sessionId, status: SessionStatus.ACTIVE, isLoyaltyCounted: false },
     });
     // A customer that was added only for this bill (no other visit) goes too, so nothing about the cancelled
-    // bill is left behind. A returning customer has other sessions and stays.
+    // bill is left behind. A returning customer has other sessions (or visits counted) and stays.
     if (removed.count > 0 && session.customerId) {
-      await this.prisma.customer.deleteMany({ where: { id: session.customerId, sessions: { none: {} } } });
+      await this.prisma.customer.deleteMany({ where: { id: session.customerId, qualifyingCompletedSessionsCount: 0, sessions: { none: {} } } });
     }
     return { message: 'Bill discarded.' };
   }

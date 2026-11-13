@@ -71,6 +71,8 @@ async function bootstrap() {
   // The assistant: chat is cheap, but speech costs money at the voice service, so cap it.
   app.use('/api/admin/assistant/speak', hourly(120, 'The assistant has spoken a lot this hour. Try again shortly.'));
   app.use('/api/admin/assistant/chat', createRateLimiter({ windowMs: 60_000, max: 60 }));
+  // The number suggestions run as the number is typed; the limit stops anyone from walking through numbers.
+  app.use('/api/staff/customers/suggest', createRateLimiter({ windowMs: 60_000, max: 150, message: 'Too many searches. Please wait a moment.' }));
   app.use('/api', createRateLimiter({ windowMs: 60_000, max: 600 }));
 
   app.useGlobalPipes(

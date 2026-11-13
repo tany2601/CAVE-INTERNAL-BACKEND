@@ -30,7 +30,7 @@ describe('discarding a bill that was started and cancelled', () => {
   it('also removes a customer that was added only for this bill, never one who has other visits', async () => {
     open({ customerId: 'c1' });
     await service.discardSession(stylist, 's1');
-    expect(prisma.customer.deleteMany).toHaveBeenCalledWith({ where: { id: 'c1', sessions: { none: {} } } });
+    expect(prisma.customer.deleteMany).toHaveBeenCalledWith({ where: { id: 'c1', qualifyingCompletedSessionsCount: 0, sessions: { none: {} } } });
   });
 
   it('is fine when it is already gone', async () => {
